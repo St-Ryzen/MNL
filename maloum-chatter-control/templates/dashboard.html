@@ -50,92 +50,36 @@
     {% for account in accounts %}
     <div class="account-card">
         <h3>{{ account.model_username }}</h3>
-        
-        <div class="chat-container" id="chat-{{ account.id }}">
-            <!-- Chat history would appear here -->
-            <p>Chat history loading...</p>
-        </div>
+        {% if current_user.is_admin %}
+            <p><strong>Assigned to:</strong> 
+                {% if account.assigned_chatters %}
+                    {% for chatter in account.assigned_chatters %}
+                        {{ chatter.username }}{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                {% else %}
+                    Unassigned
+                {% endif %}
+            </p>
+        {% endif %}
         
         <div>
-            <input type="text" class="message-input" id="message-{{ account.id }}" 
-                   placeholder="Type your message here...">
-            <button class="send-button" onclick="sendMessage({{ account.id }})">Send</button>
+            {% if current_user.is_admin %}
+                <button class="admin-btn" onclick="assignToChatter({{ account.id }})">Assign/Reassign Chatter</button>
+            {% endif %}
             <button class="admin-btn" onclick="launchAccount({{ account.id }})">Launch Account</button>
         </div>
     </div>
     {% endfor %}
     
     <script>
-        // Load chat history for each account when page loads
-        document.addEventListener('DOMContentLoaded', function() {
-            document.querySelectorAll('.account-card').forEach(card => {
-                const accountId = card.querySelector('.send-button').onclick.toString().match(/sendMessage\((\d+)\)/)[1];
-                loadChatHistory(accountId);
-            });
-        });
-        
-        async function loadChatHistory(accountId) {
-            try {
-                const response = await fetch(`/api/chat/history/${accountId}`);
-                const result = await response.json();
-                
-                if (result.history) {
-                    const chatContainer = document.getElementById(`chat-${accountId}`);
-                    chatContainer.innerHTML = '';
-                    
-                    result.history.forEach(msg => {
-                        const messageElement = document.createElement('p');
-                        messageElement.textContent = msg.text;
-                        chatContainer.appendChild(messageElement);
-                    });
-                    
-                    // Scroll to bottom
-                    chatContainer.scrollTop = chatContainer.scrollHeight;
-                }
-            } catch (error) {
-                console.error('Error loading chat history:', error);
-            }
-        }
-        
-        async function sendMessage(accountId) {
-            const messageInput = document.getElementById(`message-${accountId}`);
-            const message = messageInput.value.trim();
-            
-            if (!message) return;
-            
-            try {
-                const response = await fetch('/api/messages/send', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        account_id: accountId,
-                        message: message
-                    })
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    // Add message to chat display
-                    const chatContainer = document.getElementById(`chat-${accountId}`);
-                    const messageElement = document.createElement('p');
-                    messageElement.textContent = `You: ${message}`;
-                    chatContainer.appendChild(messageElement);
-                    
-                    // Clear input
-                    messageInput.value = '';
-                    
-                    // Scroll to bottom
-                    chatContainer.scrollTop = chatContainer.scrollHeight;
-                } else {
-                    alert('Error sending message: ' + result.error);
-                }
-            } catch (error) {
-                alert('Error sending message: ' + error.message);
-            }
-        }
+        // Pass user data to JavaScript
+        const userData = [
+            {% for user in users %}
+                {% if not user.is_admin %}
+                    {id: {{ user.id }}, username: "{{ user.username }}"},
+                {% endif %}
+            {% endfor %}
+        ];
         
         async function deleteUser(userId, username) {
             if (!confirm(`Are you sure you want to delete user '${username}'? This action cannot be undone.`)) {
@@ -165,19 +109,103 @@
             }
         }
         
-        // Allow sending with Enter key
-        document.querySelectorAll('.message-input').forEach(input => {
-            input.addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') {
-                    const accountId = this.id.replace('message-', '').replace(/[^0-9]/g, '');
-                    sendMessage(accountId);
-                }
-            });
-        });
-        
         async function launchAccount(accountId) {
             // Open the launch page in a new window/tab
             window.open(`/launch_account/${accountId}`, '_blank', 'width=600,height=400');
+        }
+        
+        async function assignToChatter(accountId) {
+            // Create options for the select dropdown
+            let optionsHtml = '';
+            userData.forEach(user => {
+                optionsHtml += `<option value="${user.id}">${user.username}</option>`;
+            });
+            
+            // Create a simple modal for assigning chatters
+            const modalHtml = `
+                <div id="assign-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 1000;">
+                    <div style="background: white; padding: 20px; border-radius: 8px; width: 400px;">
+                        <h3>Manage Account Assignments</h3>
+                        <p>Select action:</p>
+                        <select id="action-select" style="width: 100%; padding: 10px; margin-bottom: 15px;">
+                            <option value="assign">Assign to Chatter</option>
+                            <option value="unassign">Unassign from Chatter</option>
+                            <option value="unassign_all">Unassign All Chatters</option>
+                        </select>
+                        
+                        <div id="chatter-selection" style="margin-bottom: 15px;">
+                            <p>Select a chatter:</p>
+                            <select id="chatter-select" style="width: 100%; padding: 10px; margin-bottom: 15px;">
+                                ${optionsHtml}
+                            </select>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <button id="cancel-btn" style="padding: 10px 15px; background-color: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                            <button id="assign-btn" style="padding: 10px 15px; background-color: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">Apply</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Add modal to page
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            
+            // Toggle chatter selection visibility based on action
+            document.getElementById('action-select').addEventListener('change', function() {
+                const action = this.value;
+                const chatterSelection = document.getElementById('chatter-selection');
+                if (action === 'unassign_all') {
+                    chatterSelection.style.display = 'none';
+                } else {
+                    chatterSelection.style.display = 'block';
+                }
+            });
+            
+            // Add event listeners
+            document.getElementById('cancel-btn').addEventListener('click', function() {
+                document.getElementById('assign-modal').remove();
+            });
+            
+            document.getElementById('assign-btn').addEventListener('click', async function() {
+                const action = document.getElementById('action-select').value;
+                const chatterSelect = document.getElementById('chatter-select');
+                let chatterId = 0;
+                
+                if (action !== 'unassign_all') {
+                    chatterId = parseInt(chatterSelect.value);
+                } else {
+                    chatterId = -1; // Special value for unassign all
+                }
+                
+                try {
+                    const response = await fetch('/api/accounts/assign', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': csrfToken
+                        },
+                        body: JSON.stringify({
+                            account_id: accountId,
+                            chatter_id: chatterId,
+                            action: action === 'unassign_all' ? 'unassign' : action
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        alert('Account assignment updated successfully!');
+                        document.getElementById('assign-modal').remove();
+                        // Reload page to update assignments
+                        location.reload();
+                    } else {
+                        alert('Error updating account assignment: ' + result.error);
+                    }
+                } catch (error) {
+                    alert('Error updating account assignment: ' + error.message);
+                }
+            });
         }
     </script>
 {% endblock %}

@@ -61,8 +61,31 @@ login_manager.login_view = 'login'
 csrf = CSRFProtect(app)
 
 # Initialize encryption for storing credentials
-# Generate a key for encryption - in production, you should store this securely
-key = Fernet.generate_key()
+# For development, we'll generate a consistent key
+# In production, you should store this key securely (e.g., environment variable or secure file)
+import base64
+import hashlib
+import os
+
+# Use a fixed key for development to ensure consistency across restarts
+# In production, generate a truly random key and store it securely
+def get_or_create_key():
+    # Check if we have a key file
+    key_file = 'secret.key'
+    if os.path.exists(key_file):
+        with open(key_file, 'rb') as f:
+            key = f.read()
+    else:
+        # Generate a fixed key based on a secret for development
+        # In production, use: key = Fernet.generate_key()
+        secret_phrase = "maloum_chatter_control_development_key_v1"
+        key = base64.urlsafe_b64encode(hashlib.sha256(secret_phrase.encode()).digest())
+        # Save the key for future use (in development)
+        with open(key_file, 'wb') as f:
+            f.write(key)
+    return key
+
+key = get_or_create_key()
 cipher_suite = Fernet(key)
 
 # Additional security functions
@@ -96,15 +119,26 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String(150), nullable=False)
     is_admin = db.Column(db.Boolean, default=False)  # To distinguish between admin and chatters
 
+# Association table for many-to-many relationship between ModelAccount and User (chatters)
+account_chatters = db.Table('account_chatters',
+    db.Column('account_id', db.Integer, db.ForeignKey('model_account.id'), primary_key=True),
+    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True)
+)
+
 class ModelAccount(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     model_username = db.Column(db.String(150), unique=True, nullable=False)  # Display name for chatters
     actual_username = db.Column(db.String(150), nullable=True)  # Actual login username (optional for backward compatibility)
     encrypted_password = db.Column(db.LargeBinary, nullable=False)
+    
+    # Many-to-many relationship with chatters
+    assigned_chatters = db.relationship('User', secondary=account_chatters, backref='assigned_accounts')
+    
+    # Keep the old field for backward compatibility
     assigned_chatter_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     
-    # Relationship
-    chatter = db.relationship('User', backref='assigned_models')
+    # Relationship for backward compatibility
+    chatter = db.relationship('User', backref='assigned_models_old')
 
 # Database Model for Logs
 class ActivityLog(db.Model):
@@ -426,9 +460,10 @@ def dashboard():
         users = User.query.all()
         log_activity(current_user.id, 'view_dashboard', {'role': 'admin', 'account_count': len(accounts)})
     else:
-        # Chatter sees only assigned accounts
-        accounts = ModelAccount.query.filter_by(assigned_chatter_id=current_user.id).all()
-        users = []  # Non-admins don't see user management
+        # Chatter sees only assigned accounts (using the many-to-many relationship)
+        accounts = ModelAccount.query.filter(ModelAccount.assigned_chatters.any(id=current_user.id)).all()
+        # For JavaScript functionality, we still need the list of chatters
+        users = User.query.filter_by(is_admin=False).all()
         log_activity(current_user.id, 'view_dashboard', {'role': 'chatter', 'account_count': len(accounts)})
     
     app.logger.info(f'User {current_user.username} accessed dashboard')
@@ -636,6 +671,13 @@ def setup_accounts():
         db.session.add(new_account)
         db.session.commit()
         
+        # If a chatter was assigned during setup, also add to the many-to-many relationship
+        if chatter_id and chatter_id != 0:
+            chatter = User.query.get(chatter_id)
+            if chatter and not chatter.is_admin:
+                new_account.assigned_chatters.append(chatter)
+                db.session.commit()
+        
         # Start browser session for this account using the actual login credentials
         success = model_manager.start_browser_session(new_account.id, login_username, model_password)
         
@@ -710,12 +752,109 @@ def add_user():
     
     return render_template('add_user.html', form=form)
 
+
+@app.route('/api/accounts/assign', methods=['POST'])
+@login_required
+def assign_account():
+    if not current_user.is_admin:
+        return jsonify({'error': 'Unauthorized'}), 403
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Invalid JSON data'}), 400
+            
+        account_id = data.get('account_id')
+        chatter_id = data.get('chatter_id')
+        action = data.get('action', 'assign')  # 'assign' or 'unassign'
+        
+        # Check if account exists
+        account = ModelAccount.query.get(account_id)
+        if not account:
+            return jsonify({'error': 'Account not found'}), 404
+        
+        # Handle unassign all
+        if chatter_id == -1:  # Special value to unassign all
+            account.assigned_chatters.clear()
+            db.session.commit()
+            log_activity(current_user.id, 'unassign_all_chatters', {
+                'account_id': account_id,
+                'account_name': account.model_username
+            })
+            app.logger.info(f'Admin {current_user.username} unassigned all chatters from account {account.model_username}')
+            return jsonify({'success': True})
+        
+        # Check if chatter exists (or if unassigning with chatter_id=0)
+        if chatter_id != 0:  # 0 means unassign specific chatter
+            chatter = User.query.get(chatter_id)
+            if not chatter or chatter.is_admin:
+                return jsonify({'error': 'Invalid chatter'}), 400
+            
+            if action == 'assign':
+                # Add chatter to assigned chatters
+                if chatter not in account.assigned_chatters:
+                    account.assigned_chatters.append(chatter)
+                log_activity(current_user.id, 'assign_chatter_to_account', {
+                    'account_id': account_id,
+                    'account_name': account.model_username,
+                    'assigned_chatter_id': chatter_id,
+                    'chatter_username': chatter.username
+                })
+                app.logger.info(f'Admin {current_user.username} assigned chatter {chatter.username} to account {account.model_username}')
+            elif action == 'unassign':
+                # Remove chatter from assigned chatters
+                if chatter in account.assigned_chatters:
+                    account.assigned_chatters.remove(chatter)
+                log_activity(current_user.id, 'unassign_chatter_from_account', {
+                    'account_id': account_id,
+                    'account_name': account.model_username,
+                    'unassigned_chatter_id': chatter_id,
+                    'chatter_username': chatter.username
+                })
+                app.logger.info(f'Admin {current_user.username} unassigned chatter {chatter.username} from account {account.model_username}')
+        else:
+            # Unassign all chatters
+            account.assigned_chatters.clear()
+            log_activity(current_user.id, 'unassign_all_chatters', {
+                'account_id': account_id,
+                'account_name': account.model_username
+            })
+            app.logger.info(f'Admin {current_user.username} unassigned all chatters from account {account.model_username}')
+        
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        app.logger.error(f'Error assigning account: {str(e)}')
+        return jsonify({'error': 'Internal server error'}), 500
+
+# Exempt this route from CSRF protection as it's an API endpoint
+csrf.exempt(assign_account)
+
 @app.route('/launch_account/<int:account_id>')
 @login_required
 def launch_account(account_id):
     # Check if user is authorized to access this account
     account = ModelAccount.query.get(account_id)
-    if not account or (not current_user.is_admin and account.assigned_chatter_id != current_user.id):
+    if not account:
+        log_activity(current_user.id, 'unauthorized_action', {
+            'action': 'launch_account',
+            'account_id': account_id
+        })
+        app.logger.warning(f'User {current_user.username} tried to launch non-existent account {account_id}')
+        return 'Unauthorized', 403
+    
+    # Check if user is authorized (admin or assigned chatter)
+    is_authorized = False
+    if current_user.is_admin:
+        is_authorized = True
+    else:
+        # Check if current user is in the assigned chatters list
+        for chatter in account.assigned_chatters:
+            if chatter.id == current_user.id:
+                is_authorized = True
+                break
+    
+    if not is_authorized:
         log_activity(current_user.id, 'unauthorized_action', {
             'action': 'launch_account',
             'account_id': account_id
@@ -754,41 +893,45 @@ def launch_account(account_id):
         '''
     else:
         # If we can't launch the standalone browser, try the alternative method
-        encrypted_password = account.encrypted_password
-        password = cipher_suite.decrypt(encrypted_password).decode()
-        
-        # Use the actual username if available, otherwise fall back to display name
-        login_username = account.actual_username if account.actual_username else account.model_username
-        success = model_manager.start_browser_session(account_id, login_username, password)
-        if success:
-            success = model_manager.open_standalone_browser(account_id)
+        try:
+            encrypted_password = account.encrypted_password
+            password = cipher_suite.decrypt(encrypted_password).decode()
+            
+            # Use the actual username if available, otherwise fall back to display name
+            login_username = account.actual_username if account.actual_username else account.model_username
+            success = model_manager.start_browser_session(account_id, login_username, password)
             if success:
-                log_activity(current_user.id, 'launch_account', {
-                    'account_id': account_id,
-                    'target_model': account.model_username
-                })
-                app.logger.info(f'User {current_user.username} launched account {account.model_username}')
-                
-                return f'''
-                <html>
-                <head>
-                    <title>Account Launched - {account.model_username}</title>
-                    <script>
-                        window.onload = function() {{
-                            alert("Account {account.model_username} is now open in a separate Chrome window.\\n\\nSwitch to that window to interact directly with Maloum.com.\\n\\nYour extensions are available in this browser window.");
-                            window.close();
-                        }};
-                    </script>
-                </head>
-                <body>
-                    <h2>Account {account.model_username} is now open</h2>
-                    <p>Please switch to the newly opened Chrome window to interact with Maloum.com directly.</p>
-                    <p>Your Chrome extensions (including Linguana Translator) are available in this window.</p>
-                </body>
-                </html>
-                '''
-        
-        return f'Error launching account {account.model_username}. Please make sure Chrome is installed and accessible.', 500
+                success = model_manager.open_standalone_browser(account_id)
+                if success:
+                    log_activity(current_user.id, 'launch_account', {
+                        'account_id': account_id,
+                        'target_model': account.model_username
+                    })
+                    app.logger.info(f'User {current_user.username} launched account {account.model_username}')
+                    
+                    return f'''
+                    <html>
+                    <head>
+                        <title>Account Launched - {account.model_username}</title>
+                        <script>
+                            window.onload = function() {{
+                                alert("Account {account.model_username} is now open in a separate Chrome window.\\n\\nSwitch to that window to interact directly with Maloum.com.\\n\\nYour extensions are available in this browser window.");
+                                window.close();
+                            }};
+                        </script>
+                    </head>
+                    <body>
+                        <h2>Account {account.model_username} is now open</h2>
+                        <p>Please switch to the newly opened Chrome window to interact with Maloum.com directly.</p>
+                        <p>Your Chrome extensions (including Linguana Translator) are available in this window.</p>
+                    </body>
+                    </html>
+                    '''
+            
+            return f'Error launching account {account.model_username}. Please make sure Chrome is installed and accessible.', 500
+        except Exception as e:
+            app.logger.error(f'Error decrypting password for account {account.model_username}: {str(e)}')
+            return f'Error launching account {account.model_username}. The account credentials may be corrupted. Please re-add this account.', 500
 
 # Exempt this route from CSRF protection as it's accessed via links/buttons
 csrf.exempt(launch_account)
@@ -827,6 +970,7 @@ if __name__ == '__main__':
         
         # Note: If you're upgrading from an older version and get database errors,
         # you may need to delete the maloum_chatter.db file to recreate it with the new schema
+        # The new schema includes a many-to-many relationship between accounts and chatters
         
         # Create a default admin user if none exists
         if not User.query.filter_by(is_admin=True).first():
