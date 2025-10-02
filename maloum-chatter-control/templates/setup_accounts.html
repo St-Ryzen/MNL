@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}Setup Model Account{% endblock %}
+
+{% block content %}
+    <div class="admin-section">
+        <h2>Setup Model Account</h2>
+        <form method="POST" id="setup-form">
+            {{ form.hidden_tag() }}
+            <div class="form-group">
+                {{ form.model_username.label(class="form-label") }}
+                {{ form.model_username(class="form-control", placeholder="Name shown to chatters") }}
+                {% if form.model_username.errors %}
+                    <div class="error">
+                        {% for error in form.model_username.errors %}
+                            {{ error }}
+                        {% endfor %}
+                    </div>
+                {% endif %}
+                <small class="form-text">This is the name chatters will see for this account</small>
+            </div>
+            <div class="form-group">
+                <label for="actual_username" class="form-label">Actual Maloum.com Username/Email</label>
+                <input type="text" id="actual_username" name="actual_username" class="form-control" placeholder="Actual login username or email">
+            </div>
+            <div class="form-group">
+                {{ form.model_password.label(class="form-label") }}
+                {{ form.model_password(class="form-control", placeholder="Actual Maloum.com password") }}
+                {% if form.model_password.errors %}
+                    <div class="error">
+                        {% for error in form.model_password.errors %}
+                            {{ error }}
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            </div>
+            <div class="form-group">
+                {{ form.chatter_id.label(class="form-label") }}
+                {{ form.chatter_id(class="form-control") }}
+                {% if form.chatter_id.errors %}
+                    <div class="error">
+                        {% for error in form.chatter_id.errors %}
+                            {{ error }}
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            </div>
+            
+            <div class="form-group">
+                <button type="button" class="btn" onclick="testLogin()">Test Login</button>
+                <span id="test-result" style="margin-left: 10px;"></span>
+            </div>
+            
+            <button type="submit" class="btn" id="submit-btn" disabled>Setup Account</button>
+        </form>
+        <a href="{{ url_for('dashboard') }}" class="back-link">Back to Dashboard</a>
+    </div>
+
+    <script>
+        let loginTestSuccessful = false;
+    
+        function testLogin() {
+            const username = document.getElementById('actual_username').value;
+            const password = document.getElementById('model_password').value;
+            
+            if (!username || !password) {
+                alert('Please enter both an actual username and password');
+                return;
+            }
+            
+            document.getElementById('test-result').innerHTML = 'Testing login...';
+            
+            fetch('/test_login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    username: username,
+                    password: password
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                const resultElement = document.getElementById('test-result');
+                
+                if (data.success) {
+                    resultElement.innerHTML = '<span style="color: green;">✓ Login successful!</span>';
+                    loginTestSuccessful = true;
+                    document.getElementById('submit-btn').disabled = false;
+                } else {
+                    resultElement.innerHTML = '<span style="color: red;">✗ ' + data.message + '</span>';
+                    loginTestSuccessful = false;
+                    document.getElementById('submit-btn').disabled = true;
+                }
+            })
+            .catch(error => {
+                document.getElementById('test-result').innerHTML = '<span style="color: red;">Error: ' + error.message + '</span>';
+            });
+        }
+        
+        // Update the form submission to ensure validation
+        document.getElementById('setup-form').addEventListener('submit', function(e) {
+            if (!loginTestSuccessful) {
+                e.preventDefault();
+                alert('Please test and verify the login before setting up the account.');
+                return;
+            }
+            
+            const displayName = document.getElementById('model_username').value;
+            const actualUsername = document.getElementById('actual_username').value;
+            const password = document.getElementById('model_password').value;
+            
+            if (!displayName) {
+                alert('Please enter a display name for the model account');
+                e.preventDefault();
+                return;
+            }
+            
+            if (!actualUsername) {
+                alert('Please enter the actual Maloum.com username');
+                e.preventDefault();
+                return;
+            }
+            
+            if (!password) {
+                alert('Please enter the password');
+                e.preventDefault();
+                return;
+            }
+        });
+    </script>
+{% endblock %}

@@ -1,0 +1,52 @@
+[28612:21804:1003/041908.516:INFO:components\enterprise\browser\controller\chrome_browser_cloud_management_controller.cc:206] No machine level policy manager exists.
+[25040:22228:1003/041908.727:ERROR:ui\gl\direct_composition_support.cc:616] AMD VideoProcessorGetOutputExtension failed: Unspecified error (0x80004005)
+[25040:22228:1003/041908.732:VERBOSE1:components\viz\service\main\viz_main_impl.cc:86] VizNullHypothesis is disabled (not a warning)
+[24380:23868:1003/041908.760:INFO:third_party\webrtc\rtc_base\cpu_info.cc:75] Available number of cores: 8
+[27760:19160:1003/041908.777:INFO:third_party\webrtc\rtc_base\cpu_info.cc:75] Available number of cores: 8
+[26684:26188:1003/041909.625:INFO:third_party\webrtc\rtc_base\cpu_info.cc:75] Available number of cores: 8
+[26348:6436:1003/041909.838:INFO:third_party\webrtc\rtc_base\cpu_info.cc:75] Available number of cores: 8
+[28248:14604:1003/041909.959:WARNING:net\spdy\spdy_session.cc:3074] Received HEADERS for invalid stream 3
+[28248:14604:1003/041909.959:WARNING:net\spdy\spdy_session.cc:3074] Received HEADERS for invalid stream 1
+[28248:14604:1003/041909.959:WARNING:net\spdy\spdy_session.cc:3074] Received HEADERS for invalid stream 5
+[28612:21804:1003/041912.028:INFO:CONSOLE:0] "[DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o", source: https://app.maloum.com/login?returnPath=/chat (0)
+[28424:28348:1003/041913.106:INFO:third_party\webrtc\rtc_base\cpu_info.cc:75] Available number of cores: 8
+[28612:21804:1003/041914.738:INFO:CONSOLE:0] "Error while trying to use the following icon from the Manifest: https://app.maloum.com/android-chrome-192x192.png (Download error or resource isn't a valid image)", source: https://app.maloum.com/login?returnPath=/chat (0)
+[28612:21804:1003/041915.294:ERROR:services\device\usb\usb_descriptors.cc:142] Failed to read length for configuration 1.
+[28612:21804:1003/041915.294:ERROR:services\device\usb\usb_descriptors.cc:142] Failed to read length for configuration 2.
+[28612:21804:1003/041915.294:ERROR:services\device\usb\usb_descriptors.cc:101] Failed to read all configuration descriptors. Expected 3, got 1.
+[28612:21804:1003/041915.294:ERROR:components\device_event_log\device_event_log_impl.cc:198] [04:19:15.295] USB: usb_device_win.cc:95 Failed to read descriptors from \\?\usb#vid_0b95&pid_1790#00000000014ead#{a5dcbf10-6530-11d2-901f-00c04fb951ed}.
+[28612:26492:1003/041916.792:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT
+[12936:23836:1003/041918.204:INFO:third_party\webrtc\rtc_base\cpu_info.cc:75] Available number of cores: 8
+[26088:24028:1003/041918.470:INFO:third_party\webrtc\rtc_base\cpu_info.cc:75] Available number of cores: 8
+[25040:22228:1003/041918.472:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 559079338
+[25040:22228:1003/041918.472:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 733108593
+[25040:22228:1003/041918.472:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 1104477328
+[25040:22228:1003/041918.472:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 1235441726
+[25040:22228:1003/041918.472:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 1398109417
+[25040:22228:1003/041918.472:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 1745445570
+[25040:22228:1003/041918.472:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 2629264519
+[25040:22228:1003/041918.472:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 2928374096
+[25040:22228:1003/041918.472:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 3162947791
+[25040:22228:1003/041918.472:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 3189316647
+[28612:21804:1003/041918.762:INFO:CONSOLE:0] "Error while trying to use the following icon from the Manifest: https://app.maloum.com/android-chrome-192x192.png (Download error or resource isn't a valid image)", source: https://app.maloum.com/chat (0)
+[28612:26492:1003/041938.009:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: QUOTA_EXCEEDED
+[25040:22228:1003/042007.351:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 559079338
+[25040:22228:1003/042007.352:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 733108593
+[25040:22228:1003/042007.352:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 1104477328
+[25040:22228:1003/042007.352:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 1235441726
+[25040:22228:1003/042007.352:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 1398109417
+[25040:22228:1003/042007.352:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 1745445570
+[25040:22228:1003/042007.352:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 2629264519
+[25040:22228:1003/042007.352:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 2928374096
+[25040:22228:1003/042007.352:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 3162947791
+[25040:22228:1003/042007.352:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 3189316647
+[25040:22228:1003/042007.729:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 559079338
+[25040:22228:1003/042007.729:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 733108593
+[25040:22228:1003/042007.729:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 1104477328
+[25040:22228:1003/042007.731:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 1235441726
+[25040:22228:1003/042007.731:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 1398109417
+[25040:22228:1003/042007.731:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 1745445570
+[25040:22228:1003/042007.731:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 2629264519
+[25040:22228:1003/042007.731:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 2928374096
+[25040:22228:1003/042007.731:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 3162947791
+[25040:22228:1003/042007.731:WARNING:cc\paint\skottie_wrapper_impl.cc:130] Encountered unknown property node with hash: 3189316647

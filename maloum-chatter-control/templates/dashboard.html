@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+
+{% block content %}
+    {% if current_user.is_admin %}
+    <div class="admin-section">
+        <div class="admin-controls">
+            <h3>Admin Controls</h3>
+            <a href="{{ url_for('setup_accounts') }}" class="admin-btn">Setup Model Account</a>
+            <a href="{{ url_for('add_user') }}" class="admin-btn">Add User</a>
+        </div>
+        
+        <div class="user-management">
+            <h3>User Management</h3>
+            <table class="user-table">
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>Role</th>
+                        <th>Assigned Accounts</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user in users %}
+                    <tr>
+                        <td>{{ user.username }}</td>
+                        <td>{% if user.is_admin %}Admin{% else %}Chatter{% endif %}</td>
+                        <td>
+                            {% for account in user.assigned_models %}
+                                {{ account.model_username }}{% if not loop.last %}, {% endif %}
+                            {% else %}
+                                None
+                            {% endfor %}
+                        </td>
+                        <td>
+                            {% if user.username != current_user.username %}
+                            <button class="delete-btn" onclick="deleteUser({{ user.id }}, '{{ user.username }}')">Delete</button>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+    
+    <h2>Your Model Accounts</h2>
+    
+    {% for account in accounts %}
+    <div class="account-card">
+        <h3>{{ account.model_username }}</h3>
+        
+        <div class="chat-container" id="chat-{{ account.id }}">
+            <!-- Chat history would appear here -->
+            <p>Chat history loading...</p>
+        </div>
+        
+        <div>
+            <input type="text" class="message-input" id="message-{{ account.id }}" 
+                   placeholder="Type your message here...">
+            <button class="send-button" onclick="sendMessage({{ account.id }})">Send</button>
+            <button class="admin-btn" onclick="launchAccount({{ account.id }})">Launch Account</button>
+        </div>
+    </div>
+    {% endfor %}
+    
+    <script>
+        // Load chat history for each account when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            document.querySelectorAll('.account-card').forEach(card => {
+                const accountId = card.querySelector('.send-button').onclick.toString().match(/sendMessage\((\d+)\)/)[1];
+                loadChatHistory(accountId);
+            });
+        });
+        
+        async function loadChatHistory(accountId) {
+            try {
+                const response = await fetch(`/api/chat/history/${accountId}`);
+                const result = await response.json();
+                
+                if (result.history) {
+                    const chatContainer = document.getElementById(`chat-${accountId}`);
+                    chatContainer.innerHTML = '';
+                    
+                    result.history.forEach(msg => {
+                        const messageElement = document.createElement('p');
+                        messageElement.textContent = msg.text;
+                        chatContainer.appendChild(messageElement);
+                    });
+                    
+                    // Scroll to bottom
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                }
+            } catch (error) {
+                console.error('Error loading chat history:', error);
+            }
+        }
+        
+        async function sendMessage(accountId) {
+            const messageInput = document.getElementById(`message-${accountId}`);
+            const message = messageInput.value.trim();
+            
+            if (!message) return;
+            
+            try {
+                const response = await fetch('/api/messages/send', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        account_id: accountId,
+                        message: message
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Add message to chat display
+                    const chatContainer = document.getElementById(`chat-${accountId}`);
+                    const messageElement = document.createElement('p');
+                    messageElement.textContent = `You: ${message}`;
+                    chatContainer.appendChild(messageElement);
+                    
+                    // Clear input
+                    messageInput.value = '';
+                    
+                    // Scroll to bottom
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                } else {
+                    alert('Error sending message: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error sending message: ' + error.message);
+            }
+        }
+        
+        async function deleteUser(userId, username) {
+            if (!confirm(`Are you sure you want to delete user '${username}'? This action cannot be undone.`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/users/delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        user_id: userId
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    location.reload(); // Reload page to update user list
+                } else {
+                    alert('Error deleting user: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error deleting user: ' + error.message);
+            }
+        }
+        
+        // Allow sending with Enter key
+        document.querySelectorAll('.message-input').forEach(input => {
+            input.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    const accountId = this.id.replace('message-', '').replace(/[^0-9]/g, '');
+                    sendMessage(accountId);
+                }
+            });
+        });
+        
+        async function launchAccount(accountId) {
+            // Open the launch page in a new window/tab
+            window.open(`/launch_account/${accountId}`, '_blank', 'width=600,height=400');
+        }
+    </script>
+{% endblock %}
