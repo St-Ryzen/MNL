@@ -1,10 +1,10 @@
 @echo off
-title Maloum Chatter Control - Server Setup
+title Model Board - Server Setup
 setlocal EnableDelayedExpansion
 
 echo.
 echo ========================================
-echo    MALOUM CHATTER CONTROL - SERVER SETUP
+echo        MODEL BOARD - SERVER SETUP
 echo ========================================
 echo.
 
@@ -68,9 +68,9 @@ echo [25%%] Pip is ready!
 REM Install packages using requirements.txt first (more reliable)
 :install_packages
 echo Checking required packages...
-if exist "requirements.txt" (
+if exist "app\requirements.txt" (
     echo Found requirements.txt, installing packages from file...
-    !PYTHON_CMD! -m pip install -r requirements.txt --quiet --disable-pip-version-check
+    !PYTHON_CMD! -m pip install -r app\requirements.txt --quiet --disable-pip-version-check
     if !errorlevel! neq 0 (
         echo WARNING: Could not install from requirements.txt, installing packages individually...
         goto :install_individual_packages
@@ -200,13 +200,14 @@ if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" (
 )
 
 REM Start Flask server with selected port
-echo Maloum Chatter Control server starting on port !PORT!...
+echo Model Board server starting on port !PORT!...
 echo.
+cd app
 !PYTHON_CMD! app.py
 
 REM If we reach here, the server stopped (this should only happen if it crashes or user presses Ctrl+C)
 echo.
-echo Maloum Chatter Control server stopped or encountered an error.
+echo Model Board server stopped or encountered an error.
 echo.
 
 goto :exit_with_pause
