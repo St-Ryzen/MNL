@@ -1,11 +1,12 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
-from flask_sqlalchemy import SQLAlchemy
 from flask_wtf import FlaskForm
 from flask_wtf.csrf import CSRFProtect
 from wtforms import StringField, PasswordField, BooleanField, SelectField, SubmitField
 from wtforms.validators import DataRequired, Length
 from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime
+import time
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -26,6 +27,14 @@ from logging.handlers import RotatingFileHandler
 import datetime
 import re
 import webbrowser
+import zipfile
+import shutil
+import base64
+from supabase import create_client, Client
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Form classes for WTForms
 class LoginForm(FlaskForm):
@@ -48,11 +57,18 @@ class SetupAccountForm(FlaskForm):
 app = Flask(__name__)
 # Generate a secure random secret key
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or secrets.token_hex(16)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///maloum_chatter.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Configure Supabase for data operations
+SUPABASE_URL = os.environ.get('SUPABASE_URL')
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("Supabase URL and Key must be set in environment variables")
+
+# Create Supabase client
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Initialize extensions
-db = SQLAlchemy(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
@@ -61,31 +77,16 @@ login_manager.login_view = 'login'
 csrf = CSRFProtect(app)
 
 # Initialize encryption for storing credentials
-# For development, we'll generate a consistent key
-# In production, you should store this key securely (e.g., environment variable or secure file)
-import base64
-import hashlib
-import os
+# Generate a key for encryption - in production, you should store this securely
+key_file = 'secret.key'
+if os.path.exists(key_file):
+    with open(key_file, 'rb') as f:
+        key = f.read()
+else:
+    key = Fernet.generate_key()
+    with open(key_file, 'wb') as f:
+        f.write(key)
 
-# Use a fixed key for development to ensure consistency across restarts
-# In production, generate a truly random key and store it securely
-def get_or_create_key():
-    # Check if we have a key file
-    key_file = 'secret.key'
-    if os.path.exists(key_file):
-        with open(key_file, 'rb') as f:
-            key = f.read()
-    else:
-        # Generate a fixed key based on a secret for development
-        # In production, use: key = Fernet.generate_key()
-        secret_phrase = "maloum_chatter_control_development_key_v1"
-        key = base64.urlsafe_b64encode(hashlib.sha256(secret_phrase.encode()).digest())
-        # Save the key for future use (in development)
-        with open(key_file, 'wb') as f:
-            f.write(key)
-    return key
-
-key = get_or_create_key()
 cipher_suite = Fernet(key)
 
 # Additional security functions
@@ -112,54 +113,248 @@ def sanitize_input(input_string):
     # Remove potentially dangerous characters
     return input_string.replace('<', '&lt;').replace('>', '&gt;').strip()
 
-# Database Models
-class User(UserMixin, db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(150), unique=True, nullable=False)
-    password_hash = db.Column(db.String(150), nullable=False)
-    is_admin = db.Column(db.Boolean, default=False)  # To distinguish between admin and chatters
+# User class for Flask-Login
+class User(UserMixin):
+    def __init__(self, id, username, password_hash, is_admin):
+        self.id = id
+        self.username = username
+        self.password_hash = password_hash
+        self.is_admin = is_admin
 
-# Association table for many-to-many relationship between ModelAccount and User (chatters)
-account_chatters = db.Table('account_chatters',
-    db.Column('account_id', db.Integer, db.ForeignKey('model_account.id'), primary_key=True),
-    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True)
-)
+    @staticmethod
+    def get(user_id):
+        """Get user by ID from Supabase"""
+        try:
+            response = supabase.table('users').select('*').eq('id', user_id).execute()
+            if response.data:
+                user_data = response.data[0]
+                # Ensure password_hash is not None or empty
+                password_hash = user_data.get('password_hash', '')
+                if not password_hash:
+                    app.logger.warning(f'User {user_data["id"]} has invalid password hash')
+                    return None
+                return User(
+                    id=user_data['id'],
+                    username=user_data['username'],
+                    password_hash=password_hash,
+                    is_admin=user_data['is_admin']
+                )
+        except Exception as e:
+            app.logger.error(f'Error getting user {user_id}: {str(e)}')
+        return None
 
-class ModelAccount(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    model_username = db.Column(db.String(150), unique=True, nullable=False)  # Display name for chatters
-    actual_username = db.Column(db.String(150), nullable=True)  # Actual login username (optional for backward compatibility)
-    encrypted_password = db.Column(db.LargeBinary, nullable=False)
-    
-    # Many-to-many relationship with chatters
-    assigned_chatters = db.relationship('User', secondary=account_chatters, backref='assigned_accounts')
-    
-    # Keep the old field for backward compatibility
-    assigned_chatter_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
-    
-    # Relationship for backward compatibility
-    chatter = db.relationship('User', backref='assigned_models_old')
+    @staticmethod
+    def get_by_username(username):
+        """Get user by username from Supabase"""
+        try:
+            response = supabase.table('users').select('*').eq('username', username).execute()
+            if response.data:
+                user_data = response.data[0]
+                # Ensure password_hash is not None or empty
+                password_hash = user_data.get('password_hash', '')
+                if not password_hash:
+                    app.logger.warning(f'User {user_data["username"]} has invalid password hash')
+                    return None
+                return User(
+                    id=user_data['id'],
+                    username=user_data['username'],
+                    password_hash=password_hash,
+                    is_admin=user_data['is_admin']
+                )
+        except Exception as e:
+            app.logger.error(f'Error getting user by username {username}: {str(e)}')
+        return None
 
-# Database Model for Logs
-class ActivityLog(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    action = db.Column(db.String(200), nullable=False)  # e.g., 'send_message', 'login', 'access_account'
-    details = db.Column(db.Text)  # JSON string with additional details
-    
-    user = db.relationship('User', backref='activity_logs')
+    @staticmethod
+    def create(username, password_hash, is_admin=False):
+        """Create new user in Supabase"""
+        try:
+            # Validate password_hash is not empty
+            if not password_hash:
+                app.logger.error(f'Attempted to create user {username} with empty password hash')
+                return None
+                
+            response = supabase.table('users').insert({
+                'username': username,
+                'password_hash': password_hash,
+                'is_admin': is_admin
+            }).execute()
+            if response.data:
+                user_data = response.data[0]
+                return User(
+                    id=user_data['id'],
+                    username=user_data['username'],
+                    password_hash=user_data['password_hash'],
+                    is_admin=user_data['is_admin']
+                )
+        except Exception as e:
+            app.logger.error(f'Error creating user {username}: {str(e)}')
+        return None
 
-def log_activity(user_id, action, details=None):
-    """Log user activity to database"""
+    @staticmethod
+    def get_all_chatters():
+        """Get all non-admin users from Supabase"""
+        try:
+            response = supabase.table('users').select('*').eq('is_admin', False).execute()
+            users = []
+            for user_data in response.data:
+                password_hash = user_data.get('password_hash', '')
+                if password_hash:  # Only include users with valid password hashes
+                    users.append(User(
+                        id=user_data['id'],
+                        username=user_data['username'],
+                        password_hash=password_hash,
+                        is_admin=user_data['is_admin']
+                    ))
+            return users
+        except Exception as e:
+            app.logger.error(f'Error getting chatters: {str(e)}')
+        return []
+
+    @staticmethod
+    def get_all():
+        """Get all users from Supabase"""
+        try:
+            response = supabase.table('users').select('*').execute()
+            users = []
+            for user_data in response.data:
+                password_hash = user_data.get('password_hash', '')
+                if password_hash:  # Only include users with valid password hashes
+                    users.append(User(
+                        id=user_data['id'],
+                        username=user_data['username'],
+                        password_hash=password_hash,
+                        is_admin=user_data['is_admin']
+                    ))
+            return users
+        except Exception as e:
+            app.logger.error(f'Error getting all users: {str(e)}')
+        return []
+
+    @staticmethod
+    def delete(user_id):
+        """Delete user from Supabase"""
+        try:
+            supabase.table('users').delete().eq('id', user_id).execute()
+            return True
+        except Exception as e:
+            app.logger.error(f'Error deleting user {user_id}: {str(e)}')
+        return False
+
+    @staticmethod
+    def admin_exists():
+        """Check if any admin user exists"""
+        try:
+            response = supabase.table('users').select('id').eq('is_admin', True).limit(1).execute()
+            return len(response.data) > 0
+        except Exception as e:
+            app.logger.error(f'Error checking admin existence: {str(e)}')
+        return False
+
+# ModelAccount helper functions
+class ModelAccount:
+    @staticmethod
+    def get_all():
+        """Get all model accounts from Supabase"""
+        try:
+            response = supabase.table('model_accounts').select('*').execute()
+            return response.data
+        except Exception as e:
+            app.logger.error(f'Error getting model accounts: {str(e)}')
+        return []
+
+    @staticmethod
+    def get_for_chatter(chatter_id):
+        """Get model accounts assigned to a specific chatter"""
+        try:
+            # Convert chatter_id to int for BIGINT comparison
+            chatter_int = int(chatter_id)
+            app.logger.info(f'Getting accounts for chatter ID: {chatter_int}')
+            
+            # Get all accounts and filter in Python since PostgreSQL array contains can be tricky
+            response = supabase.table('model_accounts').select('*').execute()
+            accounts = response.data
+            
+            filtered_accounts = []
+            for account in accounts:
+                assigned_ids = account.get('assigned_chatter_ids', [])
+                if assigned_ids:
+                    # Convert all IDs to integers for comparison
+                    try:
+                        assigned_ids = [int(x) for x in assigned_ids if x is not None]
+                        if chatter_int in assigned_ids:
+                            filtered_accounts.append(account)
+                            app.logger.info(f'Account {account["id"]} ({account["model_username"]}) is assigned to chatter {chatter_int}')
+                    except (ValueError, TypeError) as e:
+                        app.logger.warning(f'Error processing assigned_chatter_ids for account {account["id"]}: {str(e)}')
+                        continue
+            
+            app.logger.info(f'Found {len(filtered_accounts)} accounts for chatter {chatter_int}')
+            return filtered_accounts
+        except Exception as e:
+            app.logger.error(f'Error getting accounts for chatter {chatter_id}: {str(e)}')
+        return []
+
+    @staticmethod
+    def create(model_username, actual_username, encrypted_password, assigned_chatter_ids=None):
+        """Create new model account in Supabase"""
+        try:
+            if assigned_chatter_ids is None:
+                assigned_chatter_ids = []
+            
+            # Convert encrypted password bytes to base64 string for storage
+            if isinstance(encrypted_password, bytes):
+                encrypted_password_b64 = base64.b64encode(encrypted_password).decode('utf-8')
+            else:
+                encrypted_password_b64 = encrypted_password
+            
+            response = supabase.table('model_accounts').insert({
+                'model_username': model_username,
+                'actual_username': actual_username,
+                'encrypted_password': encrypted_password_b64,
+                'assigned_chatter_ids': assigned_chatter_ids
+            }).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            error_msg = str(e)
+            if 'duplicate key' in error_msg and 'model_username' in error_msg:
+                app.logger.error(f'Duplicate model username attempted: {model_username}')
+            else:
+                app.logger.error(f'Error creating model account: {error_msg}')
+        return None
+
+    @staticmethod
+    def update_assignments(account_id, assigned_chatter_ids):
+        """Update chatter assignments for a model account"""
+        try:
+            response = supabase.table('model_accounts').update({
+                'assigned_chatter_ids': assigned_chatter_ids
+            }).eq('id', account_id).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            app.logger.error(f'Error updating account assignments: {str(e)}')
+        return None
+
+    @staticmethod
+    def delete(account_id):
+        """Delete model account from Supabase"""
+        try:
+            supabase.table('model_accounts').delete().eq('id', account_id).execute()
+            return True
+        except Exception as e:
+            app.logger.error(f'Error deleting model account {account_id}: {str(e)}')
+        return False
+
+def log_activity(user_id, action, details=None, ip_address=None):
+    """Log user activity to Supabase"""
     try:
-        log_entry = ActivityLog(
-            user_id=user_id,
-            action=action,
-            details=json.dumps(details) if details else None
-        )
-        db.session.add(log_entry)
-        db.session.commit()
+        log_entry = {
+            'user_id': user_id,
+            'action': action,
+            'details': json.dumps(details) if details else None,
+            'ip_address': ip_address
+        }
+        supabase.table('activity_logs').insert(log_entry).execute()
         app.logger.info(f'Activity logged: User {user_id}, Action: {action}')
     except Exception as e:
         app.logger.error(f'Error logging activity: {str(e)}')
@@ -169,6 +364,578 @@ class ModelAccountManager:
         self.browsers = {}
         self.account_credentials = {}  # Store credentials temporarily for reconnection
         self.user_data_dirs = {}  # Store user data directory paths for each account
+        
+    def list_profile_structure(self, account_id, model_username):
+        """List the directory structure of a browser profile for debugging"""
+        try:
+            profile_dir = self.get_user_data_dir(account_id, model_username)
+            if not os.path.exists(profile_dir):
+                app.logger.warning(f'Profile directory does not exist: {profile_dir}')
+                return
+            
+            app.logger.info(f'Profile directory structure for account {account_id}:')
+            for root, dirs, files in os.walk(profile_dir):
+                rel_path = os.path.relpath(root, profile_dir)
+                level = rel_path.count(os.sep)
+                indent = "  " * level
+                app.logger.info(f'{indent}{os.path.basename(root)}/ ({len(files)} files)')
+                # Only show first level subdirectories to avoid spam
+                if level < 2:
+                    for d in dirs[:10]:  # Show max 10 directories per level
+                        app.logger.info(f'{indent}  {d}/')
+                    if len(dirs) > 10:
+                        app.logger.info(f'{indent}  ... and {len(dirs) - 10} more directories')
+        except Exception as e:
+            app.logger.error(f'Error listing profile structure: {str(e)}')
+
+    def check_for_extensions(self, account_id, model_username):
+        """Specifically check for extension installations"""
+        try:
+            profile_dir = self.get_user_data_dir(account_id, model_username)
+            if not os.path.exists(profile_dir):
+                return
+            
+            app.logger.info(f'=== EXTENSION SEARCH for account {account_id} ===')
+            
+            # Look for any directories or files containing "extension"
+            extension_locations = []
+            for root, dirs, files in os.walk(profile_dir):
+                rel_path = os.path.relpath(root, profile_dir)
+                
+                # Check for extension-related directories
+                if 'extension' in rel_path.lower():
+                    extension_locations.append(f'DIR: {rel_path} ({len(files)} files)')
+                
+                # Check for extension-related files
+                for file in files:
+                    if 'extension' in file.lower():
+                        file_path = os.path.join(rel_path, file)
+                        extension_locations.append(f'FILE: {file_path}')
+            
+            if extension_locations:
+                app.logger.info(f'Extension-related locations found:')
+                for loc in extension_locations[:20]:  # Show first 20
+                    app.logger.info(f'  {loc}')
+                if len(extension_locations) > 20:
+                    app.logger.info(f'  ... and {len(extension_locations) - 20} more')
+            else:
+                app.logger.warning(f'NO extension-related files or directories found!')
+                
+            # Specifically check for the expected Extensions directory
+            extensions_dir = os.path.join(profile_dir, 'Default', 'Extensions')
+            if os.path.exists(extensions_dir):
+                extension_folders = os.listdir(extensions_dir)
+                app.logger.info(f'Default/Extensions directory found with {len(extension_folders)} items: {extension_folders}')
+            else:
+                app.logger.warning(f'Default/Extensions directory NOT found at: {extensions_dir}')
+                
+        except Exception as e:
+            app.logger.error(f'Error checking for extensions: {str(e)}')
+
+    def capture_session_data(self, driver, account_id):
+        """Capture essential session data from browser"""
+        try:
+            app.logger.info(f"Capturing session data for account {account_id}")
+            
+            session_data = {
+                'cookies': [],
+                'localStorage': {},
+                'sessionStorage': {},
+                'timestamp': str(datetime.now())
+            }
+            
+            # Capture cookies
+            try:
+                cookies = driver.get_cookies()
+                # Filter and store essential cookies
+                essential_cookie_names = [
+                    'sb-', 'auth', 'token', 'session', 'login', 'jwt', 
+                    'access', 'refresh', 'maloum', '_ga', 'ph_'
+                ]
+                
+                for cookie in cookies:
+                    cookie_name = cookie.get('name', '').lower()
+                    # Include if cookie name contains any essential keywords
+                    if any(essential in cookie_name for essential in essential_cookie_names):
+                        session_data['cookies'].append({
+                            'name': cookie.get('name'),
+                            'value': cookie.get('value'),
+                            'domain': cookie.get('domain'),
+                            'path': cookie.get('path'),
+                            'secure': cookie.get('secure', False),
+                            'httpOnly': cookie.get('httpOnly', False)
+                        })
+                        app.logger.info(f"Captured cookie: {cookie.get('name')}")
+                
+                app.logger.info(f"Captured {len(session_data['cookies'])} essential cookies")
+                
+            except Exception as e:
+                app.logger.error(f"Error capturing cookies: {str(e)}")
+            
+            # Capture localStorage
+            try:
+                localStorage_script = """
+                var localStorage_data = {};
+                for (var key in localStorage) {
+                    if (localStorage.hasOwnProperty(key)) {
+                        localStorage_data[key] = localStorage.getItem(key);
+                    }
+                }
+                return localStorage_data;
+                """
+                localStorage_data = driver.execute_script(localStorage_script)
+                session_data['localStorage'] = localStorage_data
+                app.logger.info(f"Captured localStorage with {len(localStorage_data)} items: {list(localStorage_data.keys())}")
+                
+            except Exception as e:
+                app.logger.error(f"Error capturing localStorage: {str(e)}")
+            
+            # Capture sessionStorage
+            try:
+                sessionStorage_script = """
+                var sessionStorage_data = {};
+                for (var key in sessionStorage) {
+                    if (sessionStorage.hasOwnProperty(key)) {
+                        sessionStorage_data[key] = sessionStorage.getItem(key);
+                    }
+                }
+                return sessionStorage_data;
+                """
+                sessionStorage_data = driver.execute_script(sessionStorage_script)
+                session_data['sessionStorage'] = sessionStorage_data
+                app.logger.info(f"Captured sessionStorage with {len(sessionStorage_data)} items: {list(sessionStorage_data.keys())}")
+                
+            except Exception as e:
+                app.logger.error(f"Error capturing sessionStorage: {str(e)}")
+            
+            return session_data
+            
+        except Exception as e:
+            app.logger.error(f"Error capturing session data: {str(e)}")
+            return None
+
+    def save_session_to_supabase(self, account_id, session_data):
+        """Save session data to Supabase"""
+        try:
+            from datetime import datetime
+            
+            # Update the model account with session data
+            update_data = {
+                'auth_tokens': session_data.get('localStorage', {}),
+                'session_cookies': session_data.get('cookies', []),
+                'session_storage': session_data.get('sessionStorage', {}),
+                'last_session_update': datetime.now().isoformat()
+            }
+            
+            response = supabase.table('model_accounts').update(update_data).eq('id', account_id).execute()
+            
+            if response.data:
+                app.logger.info(f"Session data saved to Supabase for account {account_id}")
+                return True
+            else:
+                app.logger.error(f"No data returned when saving session for account {account_id}")
+                return False
+                
+        except Exception as e:
+            app.logger.error(f"Error saving session to Supabase: {str(e)}")
+            return False
+
+    def restore_session_from_supabase(self, driver, account_id):
+        """Restore session data from Supabase to browser"""
+        try:
+            app.logger.info(f"Restoring session from Supabase for account {account_id}")
+            
+            # Get session data from Supabase
+            response = supabase.table('model_accounts').select('auth_tokens, session_cookies, session_storage, last_session_update').eq('id', account_id).execute()
+            
+            if not response.data:
+                app.logger.warning(f"No session data found in Supabase for account {account_id}")
+                return False
+            
+            account_data = response.data[0]
+            
+            # Restore cookies
+            if account_data.get('session_cookies'):
+                try:
+                    for cookie_data in account_data['session_cookies']:
+                        driver.add_cookie({
+                            'name': cookie_data['name'],
+                            'value': cookie_data['value'],
+                            'domain': cookie_data['domain'],
+                            'path': cookie_data['path'],
+                            'secure': cookie_data.get('secure', False),
+                            'httpOnly': cookie_data.get('httpOnly', False)
+                        })
+                    app.logger.info(f"Restored {len(account_data['session_cookies'])} cookies")
+                except Exception as e:
+                    app.logger.error(f"Error restoring cookies: {str(e)}")
+            
+            # Restore localStorage
+            if account_data.get('auth_tokens'):
+                try:
+                    for key, value in account_data['auth_tokens'].items():
+                        localStorage_script = f"localStorage.setItem('{key}', '{value}');"
+                        driver.execute_script(localStorage_script)
+                    app.logger.info(f"Restored {len(account_data['auth_tokens'])} localStorage items")
+                except Exception as e:
+                    app.logger.error(f"Error restoring localStorage: {str(e)}")
+            
+            # Restore sessionStorage
+            if account_data.get('session_storage'):
+                try:
+                    for key, value in account_data['session_storage'].items():
+                        sessionStorage_script = f"sessionStorage.setItem('{key}', '{value}');"
+                        driver.execute_script(sessionStorage_script)
+                    app.logger.info(f"Restored {len(account_data['session_storage'])} sessionStorage items")
+                except Exception as e:
+                    app.logger.error(f"Error restoring sessionStorage: {str(e)}")
+            
+            app.logger.info(f"Session restoration completed for account {account_id}")
+            return True
+            
+        except Exception as e:
+            app.logger.error(f"Error restoring session from Supabase: {str(e)}")
+            return False
+
+    def backup_browser_profile(self, account_id, model_username):
+        """Backup browser profile to Supabase storage"""
+        max_retries = 3
+        retry_delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                profile_dir = self.get_user_data_dir(account_id, model_username)
+                
+                if not os.path.exists(profile_dir):
+                    app.logger.error(f'Profile directory does not exist: {profile_dir}')
+                    return False
+                
+                # Create a zip file of the browser profile
+                backup_path = f"{profile_dir}_backup.zip"
+                
+                # Remove existing backup file if it exists
+                if os.path.exists(backup_path):
+                    try:
+                        os.remove(backup_path)
+                    except Exception as e:
+                        app.logger.warning(f'Could not remove existing backup file: {str(e)}')
+                
+                # Essential files for session and extension restoration
+                # CRITICAL: These specific files contain authentication tokens and session data
+                essential_files = [
+                    'cookies', 'login data', 'preferences', 'local storage', 
+                    'session storage', 'web data', 'bookmarks', 'history',
+                    'network', 'secure preferences', 'extensions',
+                    # Specific authentication/session files:
+                    'current', 'log', 'manifest', 'lock',  # LevelDB files
+                    'leveldb', '.log', '.ldb', '.dbtmp'  # LevelDB extensions
+                ]
+                
+                # Essential directories that must be included
+                # CRITICAL: localStorage leveldb directory is where authentication tokens are stored
+                essential_dirs = [
+                    'extensions', 'local extension settings', 'extension state',
+                    'extension scripts', 'extension rules', 'default\\extensions',
+                    'local storage', 'local storage\\leveldb',  # CRITICAL: Authentication tokens here
+                    'session storage', 'session storage\\leveldb',
+                    'network', 'default\\network', 'default\\local storage',
+                    'default\\session storage', 'gcm store', 'sync data'
+                ]
+                
+                # Files/patterns to skip (but allow essential ones)
+                # NOTE: LOCK files are skipped by default but will be allowed in essential directories
+                skip_patterns = [
+                    'tmp', 'temp', 'lockfile', 'singleton',
+                    'crashpad', 'gpu', 'webrtc', 'pnacl', 'swiftshader',
+                    'devtools', 'metrics', 'crash', 'blob', 'pepper',
+                    'shader', 'dawn', 'graphics', 'download', 'media', 'thumbnails'
+                ]
+                
+                # Directories to skip (but allow essential ones)
+                skip_dirs = [
+                    'cache', 'temp', 'tmp', 'logs', 'crashpad', 'metrics',
+                    'devtools', 'crash reports', 'blob_storage', 'webrtc logs',
+                    'pepper data', 'shader cache', 'grshader', 'dawn',
+                    'gpucache', 'certificate transparency', 'download service', 
+                    'media', 'thumbnails', 'favicons', 'top sites', 'visit urls',
+                    'code cache'  # Keep this as cache files are large but not essential
+                ]
+                
+                files_added = 0
+                skipped_files = 0
+                
+                try:
+                    with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zipf:
+                        for root, dirs, files in os.walk(profile_dir):
+                            # Check if this directory or any parent is essential
+                            rel_path = os.path.relpath(root, profile_dir).lower()
+                            
+                            # CRITICAL: Specific checks for authentication-related directories
+                            is_localStorage_dir = ('local storage' in rel_path) or ('localstorage' in rel_path)
+                            is_sessionStorage_dir = ('session storage' in rel_path) or ('sessionstorage' in rel_path)
+                            is_extensions_dir = 'extension' in rel_path
+                            is_network_dir = 'network' in rel_path
+                            is_cookies_dir = 'cookies' in rel_path
+                            
+                            # General essential directory check
+                            is_essential_dir = any(essential in rel_path for essential in essential_dirs)
+                            
+                            # Force include critical authentication directories
+                            is_critical_auth_dir = is_localStorage_dir or is_sessionStorage_dir or is_network_dir or is_cookies_dir
+                            
+                            # Final decision: essential OR critical auth directory
+                            is_essential_dir = is_essential_dir or is_critical_auth_dir
+                            
+                            # Debug: Log directory decisions for critical paths
+                            if is_critical_auth_dir or 'extension' in rel_path:
+                                app.logger.info(f'Directory decision: {rel_path} - Essential: {is_essential_dir} (localStorage: {is_localStorage_dir}, sessionStorage: {is_sessionStorage_dir}, extensions: {is_extensions_dir})')
+                            
+                            # Skip directories unless they are essential
+                            dirs[:] = [d for d in dirs if is_essential_dir or not any(skip in d.lower() for skip in skip_dirs)]
+                            
+                            for file in files:
+                                file_path = os.path.join(root, file)
+                                file_lower = file.lower()
+                                
+                                # Check if file is essential or in essential directory
+                                is_essential_file = any(essential in file_lower for essential in essential_files)
+                                is_in_essential_dir = is_essential_dir or any(essential in rel_path for essential in essential_dirs)
+                                
+                                # CRITICAL: Force include localStorage/sessionStorage database files
+                                is_critical_auth_file = (is_localStorage_dir or is_sessionStorage_dir) and (
+                                    file_lower in ['current', 'log', 'lock', 'manifest-000001'] or
+                                    file_lower.endswith(('.log', '.ldb', '.dbtmp')) or
+                                    file_lower.startswith(('000', 'manifest'))
+                                )
+                                
+                                is_essential = is_essential_file or is_in_essential_dir or is_critical_auth_file
+                                
+                                # Skip temp files (but allow LOCK files in critical auth directories)
+                                if file_lower.endswith(('.tmp', '.temp')):
+                                    skipped_files += 1
+                                    continue
+                                
+                                # Allow LOCK files in critical auth directories, skip them elsewhere
+                                if file_lower.endswith('.lock') and not is_critical_auth_file:
+                                    skipped_files += 1
+                                    continue
+                                
+                                # Skip files based on patterns (unless essential)
+                                if not is_essential and any(skip in file_lower for skip in skip_patterns):
+                                    skipped_files += 1
+                                    continue
+                                
+                                # Handle file size limits
+                                try:
+                                    file_size = os.path.getsize(file_path)
+                                    
+                                    # For extension files, be more generous with size limits
+                                    if 'extension' in rel_path:
+                                        if file_size > 10 * 1024 * 1024:  # 10MB limit for extension files
+                                            skipped_files += 1
+                                            continue
+                                    # For other essential files
+                                    elif is_essential:
+                                        if file_size > 5 * 1024 * 1024:  # 5MB limit for essential files
+                                            skipped_files += 1
+                                            continue
+                                    # For non-essential files
+                                    else:
+                                        if file_size > 1024 * 1024:  # 1MB limit for non-essential files
+                                            skipped_files += 1
+                                            continue
+                                except:
+                                    skipped_files += 1
+                                    continue
+                                
+                                # Check if file is accessible before trying to add it
+                                try:
+                                    # Test if we can read the file
+                                    with open(file_path, 'rb') as test_f:
+                                        test_f.read(1)
+                                    
+                                    arcname = os.path.relpath(file_path, profile_dir)
+                                    zipf.write(file_path, arcname)
+                                    files_added += 1
+                                    
+                                    # Log files being added for debugging
+                                    if is_essential or 'extension' in rel_path or is_critical_auth_file:
+                                        file_rel_path = os.path.relpath(file_path, profile_dir)
+                                        app.logger.info(f'Added file: {file_rel_path} ({file_size} bytes) - Essential: {is_essential}, CriticalAuth: {is_critical_auth_file}')
+                                    
+                                except PermissionError:
+                                    app.logger.debug(f'Permission denied for file: {file_path}')
+                                    skipped_files += 1
+                                    continue
+                                except Exception as file_error:
+                                    app.logger.debug(f'Skipped file {file_path}: {str(file_error)}')
+                                    skipped_files += 1
+                                    continue
+                
+                except Exception as zip_error:
+                    app.logger.error(f'Error creating zip file (attempt {attempt + 1}): {str(zip_error)}')
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        return False
+                
+                if files_added == 0:
+                    app.logger.error(f'No files were added to backup (skipped {skipped_files} files)')
+                    if os.path.exists(backup_path):
+                        os.remove(backup_path)
+                    return False
+                
+                # Check if zip file was created and has reasonable size
+                if not os.path.exists(backup_path):
+                    app.logger.error('Backup file was not created')
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    return False
+                
+                zip_size = os.path.getsize(backup_path)
+                if zip_size < 1000:
+                    app.logger.error(f'Backup file is too small: {zip_size} bytes')
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    return False
+                
+                # Check if backup is too large for Supabase (limit to 15MB to accommodate extensions)
+                max_size = 15 * 1024 * 1024  # 15MB
+                if zip_size > max_size:
+                    app.logger.error(f'Backup file too large: {zip_size / (1024*1024):.1f} MB (max: {max_size / (1024*1024):.1f} MB)')
+                    if attempt < max_retries - 1:
+                        # Try again with even more restrictive filtering
+                        time.sleep(retry_delay)
+                        continue
+                    return False
+                
+                # Read the zip file and encode as base64 for storage
+                try:
+                    with open(backup_path, 'rb') as f:
+                        backup_data = base64.b64encode(f.read()).decode('utf-8')
+                except Exception as read_error:
+                    app.logger.error(f'Error reading backup file: {str(read_error)}')
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    return False
+                
+                # Store in Supabase
+                try:
+                    response = supabase.table('model_accounts').update({
+                        'browser_profile_backup': backup_data
+                    }).eq('id', account_id).execute()
+                    
+                    if not response.data:
+                        app.logger.error('Failed to update Supabase record')
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_delay)
+                            continue
+                        return False
+                        
+                except Exception as db_error:
+                    app.logger.error(f'Error storing backup in Supabase: {str(db_error)}')
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    return False
+                
+                # Clean up temporary zip file
+                try:
+                    os.remove(backup_path)
+                except Exception as cleanup_error:
+                    app.logger.warning(f'Could not remove temporary backup file: {str(cleanup_error)}')
+                
+                app.logger.info(f'Browser profile backed up for account {account_id} ({files_added} files, {skipped_files} skipped, {zip_size} bytes)')
+                return True
+                
+            except Exception as e:
+                app.logger.error(f'Error backing up browser profile (attempt {attempt + 1}): {str(e)}')
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                
+        app.logger.error(f'Failed to backup browser profile after {max_retries} attempts')
+        return False
+    
+    def restore_browser_profile(self, account_id, model_username):
+        """Restore browser profile from Supabase storage"""
+        try:
+            # Get backup data from Supabase
+            response = supabase.table('model_accounts').select('browser_profile_backup').eq('id', account_id).execute()
+            
+            if not response.data or not response.data[0].get('browser_profile_backup'):
+                app.logger.info(f'No backup found for account {account_id}')
+                return False
+            
+            backup_data = response.data[0]['browser_profile_backup']
+            profile_dir = self.get_user_data_dir(account_id, model_username)
+            
+            app.logger.info(f'Starting profile restore for account {account_id}, profile_dir: {profile_dir}')
+            
+            # If profile directory exists, back it up first
+            if os.path.exists(profile_dir):
+                backup_existing = f"{profile_dir}_existing_backup"
+                if os.path.exists(backup_existing):
+                    shutil.rmtree(backup_existing)
+                shutil.move(profile_dir, backup_existing)
+                app.logger.info(f'Moved existing profile to {backup_existing}')
+            
+            # Create new profile directory
+            os.makedirs(profile_dir, exist_ok=True)
+            
+            # Decode and extract backup
+            backup_zip_path = f"{profile_dir}_restore.zip"
+            with open(backup_zip_path, 'wb') as f:
+                f.write(base64.b64decode(backup_data))
+            
+            # Check zip file size
+            zip_size = os.path.getsize(backup_zip_path)
+            app.logger.info(f'Restored zip file size: {zip_size} bytes')
+            
+            with zipfile.ZipFile(backup_zip_path, 'r') as zipf:
+                file_list = zipf.namelist()
+                zipf.extractall(profile_dir)
+                app.logger.info(f'Extracted {len(file_list)} files from backup')
+                
+                # Log detailed file restoration info
+                session_files = [f for f in file_list if any(key in f.lower() for key in ['cookies', 'login', 'session', 'preferences', 'local storage', 'network'])]
+                extension_files = [f for f in file_list if 'extension' in f.lower()]
+                
+                app.logger.info(f'Restored files breakdown:')
+                app.logger.info(f'  - Total files: {len(file_list)}')
+                app.logger.info(f'  - Session files: {len(session_files)}')
+                app.logger.info(f'  - Extension files: {len(extension_files)}')
+                
+                if session_files:
+                    app.logger.info(f'Key session files: {session_files[:5]}')  # Show first 5
+                else:
+                    app.logger.warning(f'No session-related files found in backup!')
+                    
+                if extension_files:
+                    app.logger.info(f'Extension files: {extension_files[:10]}')  # Show first 10
+                    # Check for actual extension installations vs just metadata
+                    actual_extensions = [f for f in file_list if 'default/extensions/' in f.lower() and not any(meta in f.lower() for meta in ['rules', 'scripts', 'state'])]
+                    if actual_extensions:
+                        app.logger.info(f'Actual extension installations found: {len(actual_extensions)} files')
+                        app.logger.info(f'Sample extension files: {actual_extensions[:5]}')
+                    else:
+                        app.logger.warning(f'Only extension metadata found - no actual extensions installed!')
+                else:
+                    app.logger.warning(f'No extension files found in backup!')
+            
+            # Clean up temporary zip file
+            os.remove(backup_zip_path)
+            
+            app.logger.info(f'Browser profile restored successfully for account {account_id}')
+            return True
+            
+        except Exception as e:
+            app.logger.error(f'Error restoring browser profile: {str(e)}')
+            return False
         
     def get_user_data_dir(self, account_id, model_username):
         """Get or create a user data directory for a specific account"""
@@ -189,17 +956,52 @@ class ModelAccountManager:
             atexit.register(cleanup_func)
         
         return self.user_data_dirs[account_id]
+    
+    def check_profile_contents(self, account_id, model_username):
+        """Check what files exist in the profile directory for diagnostics"""
+        try:
+            profile_dir = self.get_user_data_dir(account_id, model_username)
+            if not os.path.exists(profile_dir):
+                app.logger.warning(f'Profile directory does not exist: {profile_dir}')
+                return
+            
+            # Count different types of files
+            total_files = 0
+            session_files = 0
+            extension_files = 0
+            
+            for root, dirs, files in os.walk(profile_dir):
+                for file in files:
+                    total_files += 1
+                    file_lower = file.lower()
+                    rel_path = os.path.relpath(root, profile_dir).lower()
+                    
+                    if any(key in file_lower for key in ['cookies', 'login', 'session', 'preferences', 'local storage']) or any(key in rel_path for key in ['network']):
+                        session_files += 1
+                    if 'extension' in rel_path or 'extension' in file_lower:
+                        extension_files += 1
+            
+            app.logger.info(f'Profile directory contents check for account {account_id}:')
+            app.logger.info(f'  - Total files: {total_files}')
+            app.logger.info(f'  - Session files: {session_files}')
+            app.logger.info(f'  - Extension files: {extension_files}')
+            app.logger.info(f'  - Profile path: {profile_dir}')
+            
+        except Exception as e:
+            app.logger.error(f'Error checking profile contents: {str(e)}')
 
     def start_browser_session(self, account_id, username, password, open_for_chatter=False):
         """Start a browser session for a model account with persistent profile"""
-        # Store credentials for potential reconnection
-        self.account_credentials[account_id] = {
-            'username': username,
-            'password': password
-        }
+        # Store credentials for potential reconnection (only for admin setup)
+        if not open_for_chatter:
+            self.account_credentials[account_id] = {
+                'username': username,
+                'password': password
+            }
         
         # Get the user data directory for this account
         user_data_dir = self.get_user_data_dir(account_id, username)
+        app.logger.info(f'Using browser profile directory: {user_data_dir}')
         
         chrome_options = Options()
         chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
@@ -208,6 +1010,10 @@ class ModelAccountManager:
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
+        
+        # For chatter use, make the browser more visible and user-friendly
+        if open_for_chatter:
+            chrome_options.add_argument("--start-maximized")
         
         driver = None
         try:
@@ -222,363 +1028,177 @@ class ModelAccountManager:
             
             driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             
-            # Navigate to Maloum.com login page
-            login_url = "https://app.maloum.com/login?returnPath=/chat"
-            driver.get(login_url)
+            # For chatter use, restore session from Supabase and verify login
+            if open_for_chatter:
+                app.logger.info(f"=== RESTORING SESSION FROM SUPABASE for account {account_id} ===")
+                
+                # First, navigate to the domain to set up for cookie restoration
+                driver.get("https://app.maloum.com")
+                app.logger.info(f"Initial page load: {driver.current_url}")
+                
+                # Restore session data from Supabase
+                session_restored = self.restore_session_from_supabase(driver, account_id)
+                
+                if session_restored:
+                    app.logger.info(f"✓ Session data restored from Supabase for account {account_id}")
+                    
+                    # Refresh the page to apply restored session data
+                    driver.refresh()
+                    
+                    # Wait a moment for the page to load with restored session
+                    time.sleep(2)
+                    
+                else:
+                    app.logger.warning(f"✗ Failed to restore session data from Supabase for account {account_id}")
+                
+                # Now try to go to the chat page to verify login
+                chat_url = "https://app.maloum.com/chat"
+                app.logger.info(f"Navigating to chat page: {chat_url}")
+                driver.get(chat_url)
+                
+                # Log the current URL to see where we actually ended up
+                current_url = driver.current_url
+                app.logger.info(f"After navigation, current URL: {current_url}")
+                
+                # Wait to see if we're logged in
+                try:
+                    # Check if we're already logged in by looking for the Messages header
+                    WebDriverWait(driver, 5).until(
+                        EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Messages')]"))
+                    )
+                    app.logger.info(f"Session restored successfully for {username}, found Messages header")
+                    print(f"Session restored successfully for {username}")
+                    
+                    # Store the driver in our managers
+                    self.browsers[account_id] = driver
+                    return True, f"Browser session restored successfully for {username}"
+                    
+                except:
+                    # Check what page we're actually on
+                    current_url = driver.current_url
+                    page_title = driver.title
+                    app.logger.warning(f"Session check failed for {username}. Current URL: {current_url}, Title: {page_title}")
+                    
+                    # Log cookies again after failed login attempt
+                    cookies_after = driver.get_cookies()
+                    app.logger.info(f"Cookies after failed login: {len(cookies_after)}")
+                    
+                    # Check if we're on login page specifically
+                    if "login" in current_url.lower():
+                        app.logger.info(f"Redirected to login page - session expired for {username}")
+                        message = f"Session expired for {username}. Please contact admin to refresh the account session."
+                    else:
+                        app.logger.info(f"Unknown page state for {username}, may need manual intervention")
+                        message = f"Browser opened for {username} but unable to verify login status. Current page: {page_title}"
+                    
+                    print(f"Session issue for {username}: {message}")
+                    self.browsers[account_id] = driver
+                    return True, message
             
-            # Handle cookie consent if it appears
-            try:
-                # Wait for cookie consent button and click it
-                accept_button = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, "a.cmpboxbtn.cmpboxbtnyes.cmptxt_btn_yes"))
+            # For admin setup, proceed with full login process
+            else:
+                # First try to go directly to the chat page to check if already logged in
+                chat_url = "https://app.maloum.com/chat"
+                driver.get(chat_url)
+                
+                # Wait a moment to see if we're already logged in
+                try:
+                    # Check if we're already logged in by looking for the Messages header
+                    WebDriverWait(driver, 3).until(
+                        EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Messages')]"))
+                    )
+                    print(f"Already logged in for {username}, staying on chat page")
+                    
+                    # Store the driver in our managers
+                    self.browsers[account_id] = driver
+                    return True, f"Browser session restored successfully for {username} (already logged in)"
+                    
+                except:
+                    # Not logged in, need to login
+                    print(f"Not logged in, proceeding with login for {username}")
+                
+                # Navigate to Maloum.com login page
+                login_url = "https://app.maloum.com/login?returnPath=/chat"
+                driver.get(login_url)
+                
+                # Handle cookie consent if it appears
+                try:
+                    # Wait for cookie consent button and click it
+                    accept_button = WebDriverWait(driver, 5).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, "a.cmpboxbtn.cmpboxbtnyes.cmptxt_btn_yes"))
+                    )
+                    accept_button.click()
+                    print("Cookie consent accepted")
+                except:
+                    # If cookie consent doesn't appear, continue
+                    print("No cookie consent window found, continuing...")
+                
+                # Wait for and fill in the username field
+                username_field = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.NAME, "usernameOrEmail"))
                 )
-                accept_button.click()
-                print("Cookie consent accepted")
-            except:
-                # If cookie consent doesn't appear, continue
-                print("No cookie consent window found, continuing...")
-            
-            # Wait for and fill in the username field
-            username_field = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.NAME, "usernameOrEmail"))
-            )
-            username_field.clear()
-            username_field.send_keys(username)
-            
-            # Fill in the password field
-            password_field = driver.find_element(By.NAME, "password")
-            password_field.clear()
-            password_field.send_keys(password)
-            
-            # Click the login button
-            login_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit'].flex.h-fit.w-full")
-            login_button.click()
-            
-            # Wait for successful login by checking for the Messages header
-            WebDriverWait(driver, 15).until(
-                EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Messages')]"))
-            )
-            
-            print(f"Successfully logged in to account {username}")
-            
-            # Store the browser instance
-            self.browsers[account_id] = {
-                'driver': driver,
-                'username': username,
-                'password': password,
-                'user_data_dir': user_data_dir
-            }
-            return True
+                username_field.clear()
+                username_field.send_keys(username)
+                
+                # Fill in the password field
+                password_field = driver.find_element(By.NAME, "password")
+                password_field.clear()
+                password_field.send_keys(password)
+                
+                # Click the login button
+                login_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit'].flex.h-fit.w-full")
+                login_button.click()
+                
+                # Wait to see if login was successful by checking for the Messages header
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Messages')]"))
+                )
+                
+                print(f"Successfully logged in for {username}")
+                
+                # CRITICAL: For admin setup, capture and store session data in Supabase
+                if not open_for_chatter:  # Only for admin setup
+                    app.logger.info(f"=== CAPTURING SESSION DATA for account {account_id} ===")
+                    
+                    # Capture session data
+                    session_data = self.capture_session_data(driver, account_id)
+                    
+                    # Save session data to Supabase
+                    if session_data:
+                        success = self.save_session_to_supabase(account_id, session_data)
+                        if success:
+                            app.logger.info(f"✓ Session data saved to Supabase for account {account_id}")
+                        else:
+                            app.logger.error(f"✗ Failed to save session data to Supabase for account {account_id}")
+                    else:
+                        app.logger.warning(f"✗ No session data captured for account {account_id}")
+                
+                # Store the driver in our managers
+                self.browsers[account_id] = driver
+                
+                return True, f"Browser session started successfully for {username}"
+        
         except Exception as e:
-            print(f"Error logging into account {username}: {str(e)}")
+            error_msg = str(e)
+            print(f"Error starting browser session: {error_msg}")
             if driver:
                 driver.quit()
-            return False
+            return False, f"Failed to start browser session: {error_msg}"
 
-    def is_login_page(self, driver):
-        """Check if the current page is a login page"""
-        # Implement based on Maloum.com's specific elements
-        # This is a placeholder - you'll need to adjust selectors
-        try:
-            login_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Login') or contains(text(), 'Sign in') or contains(@*, 'login') or contains(@*, 'signin')]")
-            return len(login_elements) > 0
-        except:
-            return False
-
-    def reconnect_browser_session(self, account_id):
-        """Reconnect to a browser session if it was disconnected"""
-        if account_id in self.account_credentials:
-            creds = self.account_credentials[account_id]
-            return self.start_browser_session(account_id, creds['username'], creds['password'])
-        return False
-    
-    def send_message(self, account_id, message):
-        """Send a message from the model account"""
-        if account_id in self.browsers:
-            browser_info = self.browsers[account_id]
-            driver = browser_info['driver']
-            
-            try:
-                # Wait for the message input to be available
-                message_input = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable((By.XPATH, "//textarea[contains(@class, 'message-input') or contains(@class, 'chat-input') or @id='message']"))  # Adjust selector as needed
-                )
-                
-                # Clear and send the message
-                driver.execute_script("arguments[0].value = arguments[1];", message_input, message)
-                message_input.send_keys(u'\ue007')  # Send ENTER key
-                
-                return True
-            except Exception as e:
-                print(f"Error sending message for account {account_id}: {str(e)}")
-                # Try to reconnect if there was an issue
-                if not self.reconnect_browser_session(account_id):
-                    return False
-                return False
-        else:
-            # Try to reconnect if browser session doesn't exist
-            if account_id in self.account_credentials:
-                if self.reconnect_browser_session(account_id):
-                    return self.send_message(account_id, message)
-            return False
-    
-    def get_chat_history(self, account_id):
-        """Retrieve chat history for an account (implementation will depend on site structure)"""
-        if account_id in self.browsers:
-            browser_info = self.browsers[account_id]
-            driver = browser_info['driver']
-            
-            try:
-                # This will need to be customized based on Maloum.com's structure
-                chat_elements = driver.find_elements(By.XPATH, "//div[contains(@class, 'chat-message') or contains(@class, 'message')]")  # Adjust selector
-                messages = []
-                for element in chat_elements[-20:]:  # Get last 20 messages
-                    messages.append({
-                        'text': element.text,
-                        'timestamp': time.time()
-                    })
-                return messages
-            except Exception as e:
-                print(f"Error getting chat history for account {account_id}: {str(e)}")
-                return []
-        return []
-    
-    def launch_browser_for_chatter(self, account_id):
-        """Launch the browser profile for chatter to access directly"""
-        if account_id in self.browsers:
-            # Get the existing driver and show its window
-            browser_info = self.browsers[account_id]
-            driver = browser_info['driver']
-            
-            # Bring the browser window to focus
-            driver.maximize_window()
-            driver.switch_to.window(driver.current_window_handle)
-            
-            # Return the current URL
-            return driver.current_url
-        elif account_id in self.account_credentials:
-            # Start a new session with the persistent profile
-            creds = self.account_credentials[account_id]
-            if self.start_browser_session(account_id, creds['username'], creds['password']):
-                browser_info = self.browsers[account_id]
-                driver = browser_info['driver']
-                return driver.current_url
-        return None
-    
-    def open_standalone_browser(self, account_id):
-        """Open a standalone browser window that chatters can directly interact with"""
-        if account_id in self.account_credentials:
-            creds = self.account_credentials[account_id]
-            user_data_dir = self.get_user_data_dir(account_id, creds['username'])
-            
-            # Launch Chrome with the specific user data directory
-            import subprocess
-            chrome_path = self.find_chrome_path()
-            if chrome_path:
-                # Launch Chrome with the profile and go to Maloum.com
-                subprocess.Popen([
-                    chrome_path,
-                    f"--user-data-dir={user_data_dir}",
-                    "--disable-web-security",  # May be needed for some extensions
-                    "--disable-features=TranslateUI",
-                    "https://www.maloum.com"
-                ])
-                return True
-        return False
-    
-    def find_chrome_path(self):
-        """Find the Chrome installation path"""
-        import platform
-        if platform.system() == "Windows":
-            paths = [
-                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-                os.path.expanduser(r"~\AppData\Local\Google\Chrome\Application\chrome.exe")
-            ]
-            for path in paths:
-                if os.path.exists(path):
-                    return path
-        return None
-    
-    def quit_browser_session(self, account_id):
-        """Quit a browser session for a model account"""
-        if account_id in self.browsers:
-            self.browsers[account_id]['driver'].quit()
-            del self.browsers[account_id]
-    
-    def quit_all_sessions(self):
-        """Quit all active browser sessions"""
-        for account_id in list(self.browsers.keys()):
-            self.quit_browser_session(account_id)
-
-# Initialize the model account manager
-model_manager = ModelAccountManager()
-
-@login_manager.user_loader
-def load_user(user_id):
-    return User.query.get(int(user_id))
-
-@app.route('/')
-def index():
-    if current_user.is_authenticated:
-        return redirect(url_for('dashboard'))
-    return redirect(url_for('login'))
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    form = LoginForm()
-    if form.validate_on_submit():
-        username = form.username.data
-        password = form.password.data
-        
-        user = User.query.filter_by(username=username).first()
-        if user and check_password_hash(user.password_hash, password):
-            login_user(user)
-            log_activity(user.id, 'login', {'ip': request.remote_addr})
-            app.logger.info(f'User {username} logged in successfully')
-            return redirect(url_for('dashboard'))
-        
-        app.logger.warning(f'Failed login attempt for username: {username} from IP: {request.remote_addr}')
-        return 'Invalid credentials'
-    
-    return render_template('login.html', form=form)
-
-@app.route('/logout')
-@login_required
-def logout():
-    log_activity(current_user.id, 'logout', {'ip': request.remote_addr})
-    app.logger.info(f'User {current_user.username} logged out')
-    logout_user()
-    return redirect(url_for('login'))
-
-@app.route('/dashboard')
-@login_required
-def dashboard():
-    if current_user.is_admin:
-        # Admin sees all accounts and all users
-        accounts = ModelAccount.query.all()
-        users = User.query.all()
-        log_activity(current_user.id, 'view_dashboard', {'role': 'admin', 'account_count': len(accounts)})
-    else:
-        # Chatter sees only assigned accounts (using the many-to-many relationship)
-        accounts = ModelAccount.query.filter(ModelAccount.assigned_chatters.any(id=current_user.id)).all()
-        # For JavaScript functionality, we still need the list of chatters
-        users = User.query.filter_by(is_admin=False).all()
-        log_activity(current_user.id, 'view_dashboard', {'role': 'chatter', 'account_count': len(accounts)})
-    
-    app.logger.info(f'User {current_user.username} accessed dashboard')
-    return render_template('dashboard.html', accounts=accounts, users=users)
-
-@app.route('/api/messages/send', methods=['POST'])
-@login_required
-def send_message():
-    data = request.get_json()
-    account_id = data.get('account_id')
-    message = data.get('message')
-    
-    # Check if user is authorized to send from this account
-    account = ModelAccount.query.get(account_id)
-    if not account or (not current_user.is_admin and account.assigned_chatter_id != current_user.id):
-        return jsonify({'error': 'Unauthorized'}), 403
-    
-    success = model_manager.send_message(account_id, message)
-    if success:
-        log_activity(current_user.id, 'send_message', {
-            'account_id': account_id,
-            'target_model': account.model_username,
-            'message_preview': message[:50]  # First 50 chars only
-        })
-        app.logger.info(f'User {current_user.username} sent message to account {account.model_username}')
-        return jsonify({'success': True})
-    else:
-        log_activity(current_user.id, 'send_message_failed', {
-            'account_id': account_id,
-            'target_model': account.model_username,
-            'message_preview': message[:50]
-        })
-        app.logger.error(f'Failed to send message from user {current_user.username} to account {account.model_username}')
-        return jsonify({'error': 'Failed to send message'}), 500
-
-# Exempt this route from CSRF protection as it's an API endpoint
-csrf.exempt(send_message)
-
-@app.route('/api/chat/history/<int:account_id>')
-@login_required
-def get_chat_history(account_id):
-    # Check if user is authorized to view this account
-    account = ModelAccount.query.get(account_id)
-    if not account or (not current_user.is_admin and account.assigned_chatter_id != current_user.id):
-        return jsonify({'error': 'Unauthorized'}), 403
-    
-    history = model_manager.get_chat_history(account_id)
-    return jsonify({'history': history})
-
-# Exempt this route from CSRF protection as it's an API endpoint
-csrf.exempt(get_chat_history)
-
-@app.route('/api/users/delete', methods=['POST'])
-@login_required
-def delete_user():
-    if not current_user.is_admin:
-        return jsonify({'error': 'Unauthorized'}), 403
-
-    data = request.get_json()
-    user_id = data.get('user_id')
-    
-    # Don't allow deleting the current user
-    if user_id == current_user.id:
-        return jsonify({'error': 'Cannot delete yourself'}), 400
-    
-    user = User.query.get(user_id)
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
-    # Remove any model account assignments to this user
-    ModelAccount.query.filter_by(assigned_chatter_id=user_id).update({ModelAccount.assigned_chatter_id: None})
-    
-    # Delete the user
-    db.session.delete(user)
-    db.session.commit()
-    
-    log_activity(current_user.id, 'delete_user', {
-        'deleted_user_id': user_id,
-        'deleted_username': user.username
-    })
-    
-    app.logger.info(f'Admin {current_user.username} deleted user {user.username}')
-    return jsonify({'success': True})
-
-# Exempt this route from CSRF protection as it's an API endpoint
-csrf.exempt(delete_user)
-
-@app.route('/test_login', methods=['POST'])
-@login_required
-def test_login():
-    if not current_user.is_admin:
-        return jsonify({'error': 'Unauthorized'}), 403
-
-    try:
-        data = request.get_json()
-        username = data.get('username')
-        password = data.get('password')
-        
-        # Create a temporary browser instance to test login
+    def test_login(self, username, password):
+        """Test login credentials without keeping the session"""
         chrome_options = Options()
+        chrome_options.add_argument("--headless")  # Run in background for testing
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
         
         driver = None
         try:
-            # Use specific Chrome type to avoid architecture issues
             try:
                 service = Service(ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install())
                 driver = webdriver.Chrome(service=service, options=chrome_options)
             except Exception as e:
                 print(f"ChromeDriverManager failed: {e}, trying direct Chrome")
-                # Fallback to direct Chrome if ChromeDriverManager fails
                 driver = webdriver.Chrome(options=chrome_options)
             
             driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
@@ -618,369 +1238,542 @@ def test_login():
                 EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Messages')]"))
             )
             
-            if driver:
-                driver.quit()
-            return jsonify({'success': True, 'message': 'Login successful!'})
+            return True, "Login successful!"
         
         except Exception as e:
             error_msg = str(e)
+            return False, f"Login failed: {error_msg}"
+        
+        finally:
             if driver:
                 driver.quit()
-            return jsonify({'success': False, 'message': f'Login failed: {error_msg}'})
-    except Exception as e:
-        return jsonify({'success': False, 'message': f'Request processing error: {str(e)}'})
 
-# Exempt this route from CSRF protection as it's an API endpoint
-csrf.exempt(test_login)
+    def cleanup(self):
+        """Close all browser sessions"""
+        for account_id, driver in self.browsers.items():
+            try:
+                driver.quit()
+                print(f"Closed browser session for account {account_id}")
+            except Exception as e:
+                print(f"Error closing browser session for account {account_id}: {e}")
+        self.browsers.clear()
+
+# Create model manager instance
+model_manager = ModelAccountManager()
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.get(str(user_id))
+
+@app.route('/')
+def home():
+    return redirect(url_for('login'))
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    form = LoginForm()
+    if form.validate_on_submit():
+        username = sanitize_input(form.username.data)
+        password = form.password.data
+        
+        user = User.get_by_username(username)
+        if user and user.password_hash and check_password_hash(user.password_hash, password):
+            login_user(user)
+            log_activity(current_user.id, 'login', {'ip': request.remote_addr}, request.remote_addr)
+            return redirect(url_for('dashboard'))
+        else:
+            app.logger.warning(f'Failed login attempt for username: {username} from IP: {request.remote_addr}')
+            return render_template('login.html', form=form, error='Invalid username or password')
+    return render_template('login.html', form=form)
+
+@app.route('/logout')
+@login_required
+def logout():
+    log_activity(current_user.id, 'logout', {'ip': request.remote_addr}, request.remote_addr)
+    logout_user()
+    return redirect(url_for('login'))
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    if current_user.is_admin:
+        # Admin sees all accounts and all users
+        accounts = ModelAccount.get_all()
+        users = User.get_all()
+        
+        # Populate assigned_chatters for each account for display
+        all_users = {user.id: user for user in users}
+        for account in accounts:
+            assigned_ids = account.get('assigned_chatter_ids', [])
+            if assigned_ids:
+                # Convert to integers and get user objects
+                account['assigned_chatters'] = []
+                for chatter_id in assigned_ids:
+                    try:
+                        chatter_id = int(chatter_id)
+                        if chatter_id in all_users:
+                            account['assigned_chatters'].append(all_users[chatter_id])
+                    except (ValueError, TypeError):
+                        continue
+            else:
+                account['assigned_chatters'] = []
+        
+        log_activity(current_user.id, 'view_dashboard', {'role': 'admin', 'account_count': len(accounts)}, request.remote_addr)
+    else:
+        # Chatter sees only assigned accounts
+        accounts = ModelAccount.get_for_chatter(current_user.id)
+        users = []
+        
+        # Add assigned_chatters field for consistency (though not needed for chatters)
+        for account in accounts:
+            account['assigned_chatters'] = []
+        
+        log_activity(current_user.id, 'view_dashboard', {'role': 'chatter', 'account_count': len(accounts)}, request.remote_addr)
+    
+    return render_template('dashboard.html', 
+                         accounts=accounts, 
+                         users=users,
+                         is_admin=current_user.is_admin)
+
+@app.route('/delete_user/<int:user_id>')
+@login_required
+def delete_user(user_id):
+    if not current_user.is_admin:
+        return 'Access denied', 403
+    
+    if user_id == current_user.id:
+        return jsonify({'error': 'Cannot delete yourself'}), 400
+    
+    if User.delete(user_id):
+        log_activity(current_user.id, 'delete_user', {'deleted_user_id': user_id}, request.remote_addr)
+        return redirect(url_for('dashboard'))
+    else:
+        return jsonify({'error': 'User not found'}), 404
+
+@app.route('/delete_account/<int:account_id>')
+@login_required
+def delete_account(account_id):
+    if not current_user.is_admin:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    try:
+        # Get account details for logging
+        accounts = ModelAccount.get_all()
+        account = next((acc for acc in accounts if acc['id'] == account_id), None)
+        
+        if not account:
+            return jsonify({'error': 'Account not found'}), 404
+        
+        # Close browser session if it's open
+        if account_id in model_manager.browsers:
+            try:
+                model_manager.browsers[account_id].quit()
+                del model_manager.browsers[account_id]
+                app.logger.info(f'Closed browser session for deleted account {account_id}')
+            except Exception as e:
+                app.logger.warning(f'Could not close browser for account {account_id}: {str(e)}')
+        
+        # Clean up browser profile directory
+        try:
+            profile_dir = model_manager.get_user_data_dir(account_id, account['model_username'])
+            if os.path.exists(profile_dir):
+                shutil.rmtree(profile_dir)
+                app.logger.info(f'Cleaned up browser profile directory for account {account_id}')
+        except Exception as e:
+            app.logger.warning(f'Could not clean up profile directory for account {account_id}: {str(e)}')
+        
+        # Delete from database
+        if ModelAccount.delete(account_id):
+            log_activity(current_user.id, 'delete_account', {
+                'account_id': account_id,
+                'model_username': account['model_username']
+            }, request.remote_addr)
+            return jsonify({'success': True, 'message': 'Account deleted successfully'})
+        else:
+            return jsonify({'error': 'Failed to delete account'}), 500
+        
+    except Exception as e:
+        app.logger.error(f'Error deleting account {account_id}: {str(e)}')
+        return jsonify({'error': f'Error deleting account: {str(e)}'}), 500
+
+@app.route('/launch_account/<int:account_id>')
+@login_required
+def launch_account(account_id):
+    accounts = ModelAccount.get_all()
+    account = next((acc for acc in accounts if acc['id'] == account_id), None)
+    
+    if not account:
+        return jsonify({'error': 'Account not found'}), 404
+    
+    # Check if the current user has access to this account
+    if not current_user.is_admin:
+        assigned_ids = account.get('assigned_chatter_ids', [])
+        # Convert assigned_ids to integers for comparison
+        try:
+            assigned_ids = [int(x) for x in assigned_ids if x is not None]
+            if int(current_user.id) not in assigned_ids:
+                app.logger.warning(f'Access denied: User {current_user.id} not in assigned_ids {assigned_ids} for account {account_id}')
+                return jsonify({'error': 'Access denied'}), 403
+        except (ValueError, TypeError) as e:
+            app.logger.error(f'Error processing assigned_chatter_ids for account {account_id}: {str(e)}')
+            return jsonify({'error': 'Access denied'}), 403
+    
+    # Decrypt the password
+    try:
+        encrypted_password = account['encrypted_password']
+        # If it's a base64 string, decode it first
+        if isinstance(encrypted_password, str):
+            encrypted_password = base64.b64decode(encrypted_password.encode('utf-8'))
+        decrypted_password = cipher_suite.decrypt(encrypted_password).decode()
+    except Exception as e:
+        return jsonify({'error': f'Failed to decrypt password: {str(e)}'}), 500
+    
+    # Use actual_username if available, otherwise fall back to model_username
+    login_username = account.get('actual_username') or account['model_username']
+    
+    # Try to restore browser profile first
+    app.logger.info(f'Attempting to restore browser profile for account {account_id} ({account["model_username"]})')
+    restore_success = model_manager.restore_browser_profile(account_id, account['model_username'])
+    app.logger.info(f'Profile restore result: {restore_success}')
+    
+    # Check what's actually in the profile directory after restore
+    model_manager.check_profile_contents(account_id, account['model_username'])
+    
+    # Give Chrome time to recognize the restored profile
+    if restore_success:
+        import time
+        time.sleep(2)
+        app.logger.info('Waiting 2 seconds for profile to settle after restore')
+    
+    # Start browser session
+    success, message = model_manager.start_browser_session(
+        account_id, 
+        login_username, 
+        decrypted_password, 
+        open_for_chatter=True
+    )
+    
+    if success:
+        log_activity(current_user.id, 'launch_account', {
+            'account_id': account_id, 
+            'model_username': account['model_username']
+        }, request.remote_addr)
+        return jsonify({'success': True, 'message': message})
+    else:
+        return jsonify({'success': False, 'message': message})
+
 
 @app.route('/setup_accounts', methods=['GET', 'POST'])
 @login_required
 def setup_accounts():
     if not current_user.is_admin:
-        log_activity(current_user.id, 'unauthorized_action', {
-            'action': 'setup_accounts'
-        })
-        app.logger.warning(f'Non-admin user {current_user.username} tried to access setup_accounts')
         return 'Access denied', 403
         
-    chatters = User.query.filter_by(is_admin=False).all()
+    chatters = User.get_all_chatters()
     chatter_choices = [(0, '(Unassigned)')] + [(chatter.id, chatter.username) for chatter in chatters]
     
     form = SetupAccountForm()
     form.chatter_id.choices = chatter_choices
     
     if form.validate_on_submit():
-        model_username = form.model_username.data  # This is the display name
-        # Get the actual username from the form data (not part of WTForm)
-        actual_username = request.form.get('actual_username')
+        model_username = sanitize_input(form.model_username.data)
+        actual_username = sanitize_input(request.form.get('actual_username', ''))
         model_password = form.model_password.data
         chatter_id = form.chatter_id.data if form.chatter_id.data != 0 else None
         
-        # Use the actual username for login, but store the display name
+        # Use actual_username if provided, otherwise fall back to model_username
         login_username = actual_username if actual_username else model_username
         
-        # Encrypt the password before storing
+        # Encrypt the password
         encrypted_password = cipher_suite.encrypt(model_password.encode())
         
-        new_account = ModelAccount(
-            model_username=model_username,  # Display name is stored here
-            actual_username=actual_username,  # Actual login username is stored here
-            encrypted_password=encrypted_password,
-            assigned_chatter_id=chatter_id
-        )
-        db.session.add(new_account)
-        db.session.commit()
+        # Create assigned_chatter_ids list (convert to int for BIGINT)
+        assigned_chatter_ids = [int(chatter_id)] if chatter_id else []
         
-        # If a chatter was assigned during setup, also add to the many-to-many relationship
-        if chatter_id and chatter_id != 0:
-            chatter = User.query.get(chatter_id)
-            if chatter and not chatter.is_admin:
-                new_account.assigned_chatters.append(chatter)
-                db.session.commit()
+        # Check if model username already exists
+        existing_accounts = ModelAccount.get_all()
+        if any(acc['model_username'].lower() == model_username.lower() for acc in existing_accounts):
+            return render_template('setup_accounts.html', form=form, 
+                                 error=f'Model username "{model_username}" already exists. Please choose a different name.')
         
-        # Start browser session for this account using the actual login credentials
-        success = model_manager.start_browser_session(new_account.id, login_username, model_password)
+        # Create the account first
+        account = ModelAccount.create(model_username, actual_username, encrypted_password, assigned_chatter_ids)
         
-        log_activity(current_user.id, 'setup_model_account', {
-            'model_username': model_username,
-            'actual_username': login_username,
-            'assigned_chatter_id': chatter_id,
-            'session_start_success': success
-        })
-        
-        if success:
-            app.logger.info(f'Admin {current_user.username} setup new model account: {model_username} (login: {login_username})')
+        if account:
+            # Start browser session to verify login and allow extension installation
+            success, message = model_manager.start_browser_session(
+                account['id'], 
+                login_username, 
+                model_password, 
+                open_for_chatter=False  # This is for setup, not chatter use
+            )
+            
+            if success:
+                log_activity(current_user.id, 'setup_account', {
+                    'model_username': model_username,
+                    'actual_username': actual_username,
+                    'assigned_chatter_id': chatter_id,
+                    'browser_opened': True
+                }, request.remote_addr)
+                return render_template('setup_accounts.html', form=form, 
+                                     success=f'Account "{model_username}" created successfully! Browser opened for extension installation. You can backup the browser profile after installing extensions.',
+                                     account_id=account['id'])
+            else:
+                # If browser session failed, still keep the account but show warning
+                log_activity(current_user.id, 'setup_account', {
+                    'model_username': model_username,
+                    'actual_username': actual_username,
+                    'assigned_chatter_id': chatter_id,
+                    'browser_opened': False,
+                    'browser_error': message
+                }, request.remote_addr)
+                return render_template('setup_accounts.html', form=form, 
+                                     warning=f'Account "{model_username}" created, but browser session failed: {message}')
         else:
-            app.logger.error(f'Failed to start browser session for model account: {model_username}')
-        
-        return redirect(url_for('dashboard'))
-    
-    log_activity(current_user.id, 'view_setup_accounts', {})
-    app.logger.info(f'Admin {current_user.username} accessed setup accounts page')
+            return render_template('setup_accounts.html', form=form, error='Failed to create account')
     
     return render_template('setup_accounts.html', form=form)
+
+@app.route('/backup_profile/<int:account_id>')
+@login_required
+def backup_profile(account_id):
+    if not current_user.is_admin:
+        return jsonify({'success': False, 'message': 'Access denied'}), 403
+    
+    try:
+        # Get account details
+        accounts = ModelAccount.get_all()
+        account = next((acc for acc in accounts if acc['id'] == account_id), None)
+        
+        if not account:
+            return jsonify({'success': False, 'message': 'Account not found'}), 404
+        
+        app.logger.info(f'Starting backup process for account {account_id}')
+        
+        # Close browser if it's open to prevent file locks
+        browser_was_open = False
+        if account_id in model_manager.browsers:
+            try:
+                model_manager.browsers[account_id].quit()
+                del model_manager.browsers[account_id]
+                browser_was_open = True
+                app.logger.info(f'Closed browser for account {account_id} before backup')
+                # Give more time for files to be released on Windows
+                time.sleep(3)
+            except Exception as e:
+                app.logger.warning(f'Could not close browser for account {account_id}: {str(e)}')
+        
+        # CRITICAL: Close browser first to unlock database files for backup
+        browser_was_open = False
+        if account_id in model_manager.browsers:
+            try:
+                browser_was_open = True
+                app.logger.info(f'Closing browser for account {account_id} before backup to unlock database files')
+                model_manager.browsers[account_id].quit()
+                del model_manager.browsers[account_id]
+                # Wait a moment for files to be released
+                import time
+                time.sleep(2)
+                app.logger.info(f'Browser closed successfully, database files should now be accessible')
+            except Exception as e:
+                app.logger.warning(f'Error closing browser: {str(e)}')
+        
+        # Check if profile directory exists
+        profile_dir = model_manager.get_user_data_dir(account_id, account['model_username'])
+        if not os.path.exists(profile_dir):
+            return jsonify({'success': False, 'message': f'Browser profile directory not found. Please open the browser first to create a profile.'})
+        
+        # List profile structure for debugging
+        model_manager.list_profile_structure(account_id, account['model_username'])
+        
+        # Additional check specifically for extensions
+        model_manager.check_for_extensions(account_id, account['model_username'])
+        
+        # Check directory size and file count for diagnostic info
+        total_size = 0
+        file_count = 0
+        for root, dirs, files in os.walk(profile_dir):
+            for file in files:
+                try:
+                    file_path = os.path.join(root, file)
+                    total_size += os.path.getsize(file_path)
+                    file_count += 1
+                except:
+                    pass
+        
+        app.logger.info(f'Profile directory contains {file_count} files, total size: {total_size / (1024*1024):.1f} MB')
+        
+        # Backup the browser profile
+        success = model_manager.backup_browser_profile(account_id, account['model_username'])
+        
+        if success:
+            log_activity(current_user.id, 'backup_profile', {
+                'account_id': account_id,
+                'model_username': account['model_username'],
+                'file_count': file_count,
+                'profile_size_mb': round(total_size / (1024*1024), 1),
+                'browser_was_open': browser_was_open
+            }, request.remote_addr)
+            
+            status_msg = 'Browser profile backed up successfully!'
+            if browser_was_open:
+                status_msg += ' (Browser was closed during backup)'
+            status_msg += f' Processed {file_count} files ({total_size / (1024*1024):.1f} MB)'
+            
+            return jsonify({'success': True, 'message': status_msg})
+        else:
+            app.logger.error(f'Backup failed for account {account_id}')
+            return jsonify({'success': False, 'message': 'Failed to backup browser profile. Check logs for details.'})
+        
+    except Exception as e:
+        app.logger.error(f'Backup error for account {account_id}: {str(e)}')
+        return jsonify({'success': False, 'message': f'Backup error: {str(e)}'})
 
 @app.route('/add_user', methods=['GET', 'POST'])
 @login_required
 def add_user():
     if not current_user.is_admin:
-        log_activity(current_user.id, 'unauthorized_action', {
-            'action': 'add_user'
-        })
-        app.logger.warning(f'Non-admin user {current_user.username} tried to access add_user')
         return 'Access denied', 403
-        
+    
     form = AddUserForm()
     if form.validate_on_submit():
-        username = form.username.data
+        username = sanitize_input(form.username.data)
         password = form.password.data
         is_admin = form.is_admin.data
         
-        # Validate inputs
+        # Validate input
         if not validate_username(username):
-            app.logger.warning(f'Admin {current_user.username} attempted to create user with invalid username: {username}')
-            return 'Invalid username format', 400
+            return render_template('add_user.html', form=form, 
+                                 error='Username must be 3-50 characters and contain only letters, numbers, underscores, or hyphens')
         
         if not validate_password(password):
-            app.logger.warning(f'Admin {current_user.username} attempted to create user with weak password')
-            return 'Password must be at least 8 characters with uppercase, lowercase, and digit', 400
-        
-        # Sanitize inputs
-        username = sanitize_input(username)
+            return render_template('add_user.html', form=form,
+                                 error='Password must be at least 8 characters with uppercase, lowercase, and digit')
         
         # Check if user already exists
-        existing_user = User.query.filter_by(username=username).first()
+        existing_user = User.get_by_username(username)
         if existing_user:
             app.logger.warning(f'Admin {current_user.username} tried to create duplicate user: {username}')
-            return 'User already exists', 400
+            return render_template('add_user.html', form=form, error='Username already exists')
         
-        hashed_password = generate_password_hash(password)
-        new_user = User(username=username, password_hash=hashed_password, is_admin=is_admin)
-        db.session.add(new_user)
-        db.session.commit()
+        # Create new user
+        password_hash = generate_password_hash(password)
+        new_user = User.create(username, password_hash, is_admin)
         
-        log_activity(current_user.id, 'add_user', {
-            'new_username': username,
-            'new_user_admin': is_admin
-        })
-        app.logger.info(f'Admin {current_user.username} created new user: {username}')
-        
-        return redirect(url_for('dashboard'))
-    
-    log_activity(current_user.id, 'view_add_user', {})
-    app.logger.info(f'Admin {current_user.username} accessed add user page')
+        if new_user:
+            log_activity(current_user.id, 'add_user', {
+                'new_username': username,
+                'is_admin': is_admin
+            }, request.remote_addr)
+            return redirect(url_for('dashboard'))
+        else:
+            return render_template('add_user.html', form=form, error='Failed to create user')
     
     return render_template('add_user.html', form=form)
 
-
-@app.route('/api/accounts/assign', methods=['POST'])
+@app.route('/assign_chatter', methods=['POST'])
+@csrf.exempt
 @login_required
-def assign_account():
+def assign_chatter():
     if not current_user.is_admin:
-        return jsonify({'error': 'Unauthorized'}), 403
-
+        return jsonify({'success': False, 'message': 'Access denied'}), 403
+    
     try:
         data = request.get_json()
-        if not data:
-            return jsonify({'error': 'Invalid JSON data'}), 400
-            
         account_id = data.get('account_id')
         chatter_id = data.get('chatter_id')
-        action = data.get('action', 'assign')  # 'assign' or 'unassign'
+        action = data.get('action', 'assign')  # 'assign', 'unassign', or 'unassign_all'
         
-        # Check if account exists
-        account = ModelAccount.query.get(account_id)
+        app.logger.info(f'Assignment request: account_id={account_id}, chatter_id={chatter_id}, action={action}')
+        
+        accounts = ModelAccount.get_all()
+        account = next((acc for acc in accounts if acc['id'] == account_id), None)
+        
         if not account:
-            return jsonify({'error': 'Account not found'}), 404
+            return jsonify({'success': False, 'message': 'Account not found'})
         
-        # Handle unassign all
-        if chatter_id == -1:  # Special value to unassign all
-            account.assigned_chatters.clear()
-            db.session.commit()
-            log_activity(current_user.id, 'unassign_all_chatters', {
+        # Ensure current_assignments is a list of integers
+        current_assignments = account.get('assigned_chatter_ids', [])
+        if current_assignments is None:
+            current_assignments = []
+        
+        # Convert all assignments to integers for consistent comparison
+        current_assignments = [int(x) for x in current_assignments if x is not None]
+        
+        if action == 'assign':
+            if chatter_id and chatter_id not in current_assignments:
+                current_assignments.append(int(chatter_id))
+        elif action == 'unassign':
+            if int(chatter_id) in current_assignments:
+                current_assignments.remove(int(chatter_id))
+        elif action == 'unassign_all':
+            current_assignments = []
+        
+        app.logger.info(f'Updated assignments: {current_assignments}')
+        
+        # Update the account
+        updated_account = ModelAccount.update_assignments(account_id, current_assignments)
+        
+        if updated_account:
+            log_activity(current_user.id, f'chatter_{action}', {
                 'account_id': account_id,
-                'account_name': account.model_username
-            })
-            app.logger.info(f'Admin {current_user.username} unassigned all chatters from account {account.model_username}')
-            return jsonify({'success': True})
-        
-        # Check if chatter exists (or if unassigning with chatter_id=0)
-        if chatter_id != 0:  # 0 means unassign specific chatter
-            chatter = User.query.get(chatter_id)
-            if not chatter or chatter.is_admin:
-                return jsonify({'error': 'Invalid chatter'}), 400
-            
-            if action == 'assign':
-                # Add chatter to assigned chatters
-                if chatter not in account.assigned_chatters:
-                    account.assigned_chatters.append(chatter)
-                log_activity(current_user.id, 'assign_chatter_to_account', {
-                    'account_id': account_id,
-                    'account_name': account.model_username,
-                    'assigned_chatter_id': chatter_id,
-                    'chatter_username': chatter.username
-                })
-                app.logger.info(f'Admin {current_user.username} assigned chatter {chatter.username} to account {account.model_username}')
-            elif action == 'unassign':
-                # Remove chatter from assigned chatters
-                if chatter in account.assigned_chatters:
-                    account.assigned_chatters.remove(chatter)
-                log_activity(current_user.id, 'unassign_chatter_from_account', {
-                    'account_id': account_id,
-                    'account_name': account.model_username,
-                    'unassigned_chatter_id': chatter_id,
-                    'chatter_username': chatter.username
-                })
-                app.logger.info(f'Admin {current_user.username} unassigned chatter {chatter.username} from account {account.model_username}')
+                'chatter_id': chatter_id,
+                'current_assignments': current_assignments
+            }, request.remote_addr)
+            return jsonify({'success': True, 'message': f'Assignment {action}ed successfully'})
         else:
-            # Unassign all chatters
-            account.assigned_chatters.clear()
-            log_activity(current_user.id, 'unassign_all_chatters', {
-                'account_id': account_id,
-                'account_name': account.model_username
-            })
-            app.logger.info(f'Admin {current_user.username} unassigned all chatters from account {account.model_username}')
+            return jsonify({'success': False, 'message': 'Failed to update assignment'})
         
-        db.session.commit()
-        return jsonify({'success': True})
     except Exception as e:
-        app.logger.error(f'Error assigning account: {str(e)}')
-        return jsonify({'error': 'Internal server error'}), 500
+        app.logger.error(f'Assignment error: {str(e)}')
+        return jsonify({'success': False, 'message': f'Error: {str(e)}'})
 
-# Exempt this route from CSRF protection as it's an API endpoint
-csrf.exempt(assign_account)
+# Setup logging
+if not os.path.exists('logs'):
+    os.makedirs('logs')
 
-@app.route('/launch_account/<int:account_id>')
-@login_required
-def launch_account(account_id):
-    # Check if user is authorized to access this account
-    account = ModelAccount.query.get(account_id)
-    if not account:
-        log_activity(current_user.id, 'unauthorized_action', {
-            'action': 'launch_account',
-            'account_id': account_id
-        })
-        app.logger.warning(f'User {current_user.username} tried to launch non-existent account {account_id}')
-        return 'Unauthorized', 403
-    
-    # Check if user is authorized (admin or assigned chatter)
-    is_authorized = False
-    if current_user.is_admin:
-        is_authorized = True
-    else:
-        # Check if current user is in the assigned chatters list
-        for chatter in account.assigned_chatters:
-            if chatter.id == current_user.id:
-                is_authorized = True
-                break
-    
-    if not is_authorized:
-        log_activity(current_user.id, 'unauthorized_action', {
-            'action': 'launch_account',
-            'account_id': account_id
-        })
-        app.logger.warning(f'User {current_user.username} tried to launch unauthorized account {account_id}')
-        return 'Unauthorized', 403
-    
-    # Launch a standalone browser window with the saved profile for the chatter
-    success = model_manager.open_standalone_browser(account_id)
-    
-    if success:
-        log_activity(current_user.id, 'launch_account', {
-            'account_id': account_id,
-            'target_model': account.model_username
-        })
-        app.logger.info(f'User {current_user.username} launched account {account.model_username}')
-        
-        return f'''
-        <html>
-        <head>
-            <title>Account Launched - {account.model_username}</title>
-            <script>
-                window.onload = function() {{
-                    alert("Account {account.model_username} is now open in a separate Chrome window.\\n\\nSwitch to that window to interact directly with Maloum.com.\\n\\nYour extensions are available in this browser window.");
-                    window.close();
-                }};
-            </script>
-        </head>
-        <body>
-            <h2>Account {account.model_username} is now open</h2>
-            <p>Please switch to the newly opened Chrome window to interact with Maloum.com directly.</p>
-            <p>Your Chrome extensions (including Linguana Translator) are available in this window.</p>
-            <p>If the window doesn't appear, check your taskbar for a new Chrome window.</p>
-        </body>
-        </html>
-        '''
-    else:
-        # If we can't launch the standalone browser, try the alternative method
-        try:
-            encrypted_password = account.encrypted_password
-            password = cipher_suite.decrypt(encrypted_password).decode()
-            
-            # Use the actual username if available, otherwise fall back to display name
-            login_username = account.actual_username if account.actual_username else account.model_username
-            success = model_manager.start_browser_session(account_id, login_username, password)
-            if success:
-                success = model_manager.open_standalone_browser(account_id)
-                if success:
-                    log_activity(current_user.id, 'launch_account', {
-                        'account_id': account_id,
-                        'target_model': account.model_username
-                    })
-                    app.logger.info(f'User {current_user.username} launched account {account.model_username}')
-                    
-                    return f'''
-                    <html>
-                    <head>
-                        <title>Account Launched - {account.model_username}</title>
-                        <script>
-                            window.onload = function() {{
-                                alert("Account {account.model_username} is now open in a separate Chrome window.\\n\\nSwitch to that window to interact directly with Maloum.com.\\n\\nYour extensions are available in this browser window.");
-                                window.close();
-                            }};
-                        </script>
-                    </head>
-                    <body>
-                        <h2>Account {account.model_username} is now open</h2>
-                        <p>Please switch to the newly opened Chrome window to interact with Maloum.com directly.</p>
-                        <p>Your Chrome extensions (including Linguana Translator) are available in this window.</p>
-                    </body>
-                    </html>
-                    '''
-            
-            return f'Error launching account {account.model_username}. Please make sure Chrome is installed and accessible.', 500
-        except Exception as e:
-            app.logger.error(f'Error decrypting password for account {account.model_username}: {str(e)}')
-            return f'Error launching account {account.model_username}. The account credentials may be corrupted. Please re-add this account.', 500
+file_handler = RotatingFileHandler('logs/maloum_chatter.log', maxBytes=10240000, backupCount=10)
+file_handler.setFormatter(logging.Formatter(
+    '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
+))
+file_handler.setLevel(logging.INFO)
+app.logger.addHandler(file_handler)
 
-# Exempt this route from CSRF protection as it's accessed via links/buttons
-csrf.exempt(launch_account)
+app.logger.setLevel(logging.INFO)
+app.logger.info('Maloum Chatter Control startup')
 
-# Properly handle app cleanup
-import atexit
-
+# Cleanup function for graceful shutdown
 def cleanup():
-    """Clean up all browser sessions when app shuts down"""
-    model_manager.quit_all_sessions()
+    """Clean up resources on shutdown"""
+    try:
+        model_manager.cleanup()
+        app.logger.info('Application cleanup completed')
+    except Exception as e:
+        app.logger.error(f'Error during cleanup: {str(e)}')
 
+import atexit
 atexit.register(cleanup)
 
-def find_available_port(start_port=5000, max_attempts=10):
-    """
-    Find an available port starting from start_port
-    """
+def find_available_port(start_port, max_attempts):
+    """Find an available port starting from start_port"""
     import socket
     
-    for port in range(start_port, start_port + max_attempts):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
+    for i in range(max_attempts):
+        port = start_port + i
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.bind(('127.0.0.1', port))
                 return port
-            except OSError:
-                continue
+        except OSError:
+            continue
     
     return None
 
-
-
 if __name__ == '__main__':
-    with app.app_context():
-        # Create all tables
-        db.create_all()
-        
-        # Note: If you're upgrading from an older version and get database errors,
-        # you may need to delete the maloum_chatter.db file to recreate it with the new schema
-        # The new schema includes a many-to-many relationship between accounts and chatters
-        
-        # Create a default admin user if none exists
-        if not User.query.filter_by(is_admin=True).first():
-            admin = User(
-                username='admin',
-                password_hash=generate_password_hash('admin123'),
-                is_admin=True
-            )
-            db.session.add(admin)
-            db.session.commit()
+    # Create a default admin user if none exists
+    if not User.admin_exists():
+        admin = User.create('admin', generate_password_hash('admin123'), True)
+        if admin:
             app.logger.info('Default admin user created')
     
     # Find an available port starting from 5000

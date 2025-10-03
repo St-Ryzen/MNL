@@ -65,6 +65,7 @@
         <div>
             {% if current_user.is_admin %}
                 <button class="admin-btn" onclick="assignToChatter({{ account.id }})">Assign/Reassign Chatter</button>
+                <button class="delete-btn" onclick="deleteAccount({{ account.id }}, '{{ account.model_username }}')">Delete Account</button>
             {% endif %}
             <button class="admin-btn" onclick="launchAccount({{ account.id }})">Launch Account</button>
         </div>
@@ -110,8 +111,43 @@
         }
         
         async function launchAccount(accountId) {
-            // Open the launch page in a new window/tab
-            window.open(`/launch_account/${accountId}`, '_blank', 'width=600,height=400');
+            try {
+                const response = await fetch(`/launch_account/${accountId}`, {
+                    method: 'GET'
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('Browser session started successfully! ' + result.message);
+                } else {
+                    alert('Error launching account: ' + result.message);
+                }
+            } catch (error) {
+                alert('Error launching account: ' + error.message);
+            }
+        }
+        
+        async function deleteAccount(accountId, modelUsername) {
+            if (!confirm(`Are you sure you want to delete the model account '${modelUsername}'? This action cannot be undone.`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/delete_account/${accountId}`, {
+                    method: 'GET'
+                });
+                
+                if (response.ok) {
+                    alert('Model account deleted successfully!');
+                    location.reload(); // Reload page to update account list
+                } else {
+                    const result = await response.json();
+                    alert('Error deleting account: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error deleting account: ' + error.message);
+            }
         }
         
         async function assignToChatter(accountId) {
@@ -179,16 +215,15 @@
                 }
                 
                 try {
-                    const response = await fetch('/api/accounts/assign', {
+                    const response = await fetch('/assign_chatter', {
                         method: 'POST',
                         headers: {
-                            'Content-Type': 'application/json',
-                            'X-CSRFToken': csrfToken
+                            'Content-Type': 'application/json'
                         },
                         body: JSON.stringify({
                             account_id: accountId,
                             chatter_id: chatterId,
-                            action: action === 'unassign_all' ? 'unassign' : action
+                            action: action
                         })
                     });
                     

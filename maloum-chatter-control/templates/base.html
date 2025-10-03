@@ -2,10 +2,7 @@
 <html>
 <head>
     <title>{% block title %}Maloum Model Account Manager{% endblock %}</title>
-    <script>
-        // CSRF token for form submissions (not API calls)
-        const csrfToken = "{{ csrf_token() }}";
-    </script>
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     {% block styles %}
     <style>
         body {

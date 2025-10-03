@@ -5,6 +5,26 @@
 {% block content %}
     <div class="admin-section">
         <h2>Setup Model Account</h2>
+        
+        {% if success %}
+            <div class="alert alert-success">
+                {{ success }}
+                {% if account_id %}
+                    <br><br>
+                    <button type="button" class="btn" onclick="backupProfile({{ account_id }})">Backup Browser Profile</button>
+                    <span id="backup-result" style="margin-left: 10px;"></span>
+                {% endif %}
+            </div>
+        {% endif %}
+        
+        {% if warning %}
+            <div class="alert alert-warning">{{ warning }}</div>
+        {% endif %}
+        
+        {% if error %}
+            <div class="alert alert-error">{{ error }}</div>
+        {% endif %}
+        
         <form method="POST" id="setup-form">
             {{ form.hidden_tag() }}
             <div class="form-group">
@@ -46,67 +66,14 @@
                 {% endif %}
             </div>
             
-            <div class="form-group">
-                <button type="button" class="btn" onclick="testLogin()">Test Login</button>
-                <span id="test-result" style="margin-left: 10px;"></span>
-            </div>
-            
-            <button type="submit" class="btn" id="submit-btn" disabled>Setup Account</button>
+            <button type="submit" class="btn" id="submit-btn">Setup Account</button>
         </form>
         <a href="{{ url_for('dashboard') }}" class="back-link">Back to Dashboard</a>
     </div>
 
     <script>
-        let loginTestSuccessful = false;
-    
-        function testLogin() {
-            const username = document.getElementById('actual_username').value;
-            const password = document.getElementById('model_password').value;
-            
-            if (!username || !password) {
-                alert('Please enter both an actual username and password');
-                return;
-            }
-            
-            document.getElementById('test-result').innerHTML = 'Testing login...';
-            
-            fetch('/test_login', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    username: username,
-                    password: password
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                const resultElement = document.getElementById('test-result');
-                
-                if (data.success) {
-                    resultElement.innerHTML = '<span style="color: green;">✓ Login successful!</span>';
-                    loginTestSuccessful = true;
-                    document.getElementById('submit-btn').disabled = false;
-                } else {
-                    resultElement.innerHTML = '<span style="color: red;">✗ ' + data.message + '</span>';
-                    loginTestSuccessful = false;
-                    document.getElementById('submit-btn').disabled = true;
-                }
-            })
-            .catch(error => {
-                document.getElementById('test-result').innerHTML = '<span style="color: red;">Error: ' + error.message + '</span>';
-            });
-        }
-        
-        // Update the form submission to ensure validation
+        // Form validation only
         document.getElementById('setup-form').addEventListener('submit', function(e) {
-            if (!loginTestSuccessful) {
-                e.preventDefault();
-                alert('Please test and verify the login before setting up the account.');
-                return;
-            }
-            
             const displayName = document.getElementById('model_username').value;
             const actualUsername = document.getElementById('actual_username').value;
             const password = document.getElementById('model_password').value;
@@ -129,5 +96,26 @@
                 return;
             }
         });
+        
+        function backupProfile(accountId) {
+            document.getElementById('backup-result').innerHTML = 'Backing up profile...';
+            
+            fetch('/backup_profile/' + accountId, {
+                method: 'GET'
+            })
+            .then(response => response.json())
+            .then(data => {
+                const resultElement = document.getElementById('backup-result');
+                
+                if (data.success) {
+                    resultElement.innerHTML = '<span style="color: green;">✓ ' + data.message + '</span>';
+                } else {
+                    resultElement.innerHTML = '<span style="color: red;">✗ ' + data.message + '</span>';
+                }
+            })
+            .catch(error => {
+                document.getElementById('backup-result').innerHTML = '<span style="color: red;">Error: ' + error.message + '</span>';
+            });
+        }
     </script>
 {% endblock %}
