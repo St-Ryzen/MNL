@@ -18,6 +18,17 @@ from webdriver_manager.core.os_manager import ChromeType
 import platform
 import threading
 import time
+
+# Version management
+def get_app_version():
+    """Read version from VERSION file"""
+    try:
+        with open('VERSION', 'r') as f:
+            return f.read().strip()
+    except:
+        return "Unknown"
+
+APP_VERSION = get_app_version()
 import os
 import secrets
 from cryptography.fernet import Fernet
@@ -1333,7 +1344,8 @@ def dashboard():
     return render_template('dashboard.html', 
                          accounts=accounts, 
                          users=users,
-                         is_admin=current_user.is_admin)
+                         is_admin=current_user.is_admin,
+                         app_version=APP_VERSION)
 
 @app.route('/delete_user/<int:user_id>')
 @login_required

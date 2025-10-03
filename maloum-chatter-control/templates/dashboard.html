@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 
 {% block content %}
+    <div class="version-info" style="text-align: right; font-size: 0.8em; color: #666; margin-bottom: 10px;">
+        Version {{ app_version }}
+    </div>
     {% if current_user.is_admin %}
     <div class="admin-section">
         <div class="admin-controls">
@@ -119,7 +122,8 @@
                 const result = await response.json();
                 
                 if (result.success) {
-                    alert('Browser session started successfully! ' + result.message);
+                    // Browser launched successfully - no popup needed for chatters
+                    console.log('Browser session started successfully! ' + result.message);
                 } else {
                     alert('Error launching account: ' + result.message);
                 }
