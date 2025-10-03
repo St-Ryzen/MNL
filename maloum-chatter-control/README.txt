@@ -1,5 +1,5 @@
 ==========================================
-   MALOUM CHATTER CONTROL - Quick Start
+           MODEL BOARD - Quick Start
 ==========================================
 
 FOR CHATTERS:

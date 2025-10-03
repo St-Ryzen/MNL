@@ -1,10 +1,10 @@
 @echo off
-title Maloum Chatter Control - Server Setup
+title Model Board - Server Setup
 setlocal EnableDelayedExpansion
 
 echo.
 echo ========================================
-echo    MALOUM CHATTER CONTROL - SERVER SETUP
+echo        MODEL BOARD - SERVER SETUP
 echo ========================================
 echo.
 
@@ -200,14 +200,14 @@ if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" (
 )
 
 REM Start Flask server with selected port
-echo Maloum Chatter Control server starting on port !PORT!...
+echo Model Board server starting on port !PORT!...
 echo.
 cd app
 !PYTHON_CMD! app.py
 
 REM If we reach here, the server stopped (this should only happen if it crashes or user presses Ctrl+C)
 echo.
-echo Maloum Chatter Control server stopped or encountered an error.
+echo Model Board server stopped or encountered an error.
 echo.
 
 goto :exit_with_pause

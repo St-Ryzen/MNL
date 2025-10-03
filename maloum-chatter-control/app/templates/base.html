@@ -1,105 +1,498 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>{% block title %}Maloum Model Account Manager{% endblock %}</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Model Board{% endblock %}</title>
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
     {% block styles %}
     <style>
-        body {
-            font-family: Arial, sans-serif;
+        * {
             margin: 0;
-            padding: 20px;
-            background-color: #f5f5f5;
+            padding: 0;
+            box-sizing: border-box;
         }
-        .header {
-            background-color: #333;
-            color: white;
-            padding: 15px;
-            margin-bottom: 30px;
-        }
-        .account-card {
-            background-color: white;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .admin-controls {
-            margin-top: 30px;
-            padding: 20px;
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: #f8f9fa;
-            border-radius: 8px;
+            color: #333;
+            line-height: 1.6;
         }
-        .admin-btn {
-            display: inline-block;
-            padding: 10px 15px;
-            background-color: #28a745;
+        
+        /* Layout Structure */
+        .app-container {
+            display: flex;
+            min-height: 100vh;
+        }
+        
+        /* Sidebar Navigation */
+        .sidebar {
+            width: 260px;
+            background: #2c3e50;
+            color: white;
+            position: fixed;
+            height: 100vh;
+            left: 0;
+            top: 0;
+            z-index: 1000;
+            overflow-y: auto;
+            transition: all 0.3s ease;
+        }
+        
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            text-align: center;
+        }
+        
+        .sidebar-header h1 {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+        
+        .sidebar-header .version {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+        
+        .nav-menu {
+            padding: 20px 0;
+        }
+        
+        .nav-item {
+            margin-bottom: 5px;
+        }
+        
+        .nav-link {
+            display: flex;
+            align-items: center;
+            padding: 12px 20px;
             color: white;
             text-decoration: none;
-            border-radius: 4px;
-            margin-right: 10px;
-            margin-bottom: 10px;
-            cursor: pointer;
-            border: none;
+            transition: all 0.3s ease;
+            border-left: 3px solid transparent;
         }
-        .admin-btn:hover {
-            background-color: #218838;
+        
+        .nav-link:hover, .nav-link.active {
+            background-color: rgba(255,255,255,0.1);
+            border-left-color: #3498db;
+            padding-left: 25px;
         }
-        .user-management {
-            margin-top: 30px;
+        
+        .nav-link i {
+            margin-right: 12px;
+            width: 18px;
+            text-align: center;
+        }
+        
+        .nav-section {
+            padding: 10px 20px 5px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            opacity: 0.7;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            margin-top: 10px;
+        }
+        
+        .user-info {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
             padding: 20px;
-            background-color: #f8f9fa;
-            border-radius: 8px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            background: rgba(0,0,0,0.1);
         }
-        .user-table {
+        
+        .user-info .user-name {
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        
+        .logout-btn {
+            display: flex;
+            align-items: center;
+            color: white;
+            text-decoration: none;
+            font-size: 14px;
+            opacity: 0.9;
+            transition: opacity 0.3s ease;
+        }
+        
+        .logout-btn:hover {
+            opacity: 1;
+        }
+        
+        .logout-btn i {
+            margin-right: 8px;
+        }
+        
+        /* Main Content Area */
+        .main-content {
+            flex: 1;
+            margin-left: 260px;
+            min-height: 100vh;
+        }
+        
+        .main-content.no-sidebar {
+            margin-left: 0;
+        }
+        
+        .top-bar {
+            background: white;
+            padding: 15px 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .page-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .content-area {
+            padding: 30px;
+        }
+        
+        .content-wrapper {
+            padding: 30px;
+        }
+        
+        /* Login page styles */
+        .login-page {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
             width: 100%;
-            border-collapse: collapse;
+        }
+        
+        .main-content.login-page .content-wrapper {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 0;
+        }
+        
+        /* Cards and Components */
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.07);
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+        
+        .card-header {
+            padding: 20px 25px;
+            border-bottom: 1px solid #eee;
+            background: #f8f9fa;
+        }
+        
+        .card-header h3 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .card-body {
+            padding: 25px;
+        }
+        
+        .account-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-left: 4px solid #667eea;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        
+        .account-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        
+        .account-card h3 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+        
+        .account-actions {
             margin-top: 15px;
         }
-        .user-table th, .user-table td {
-            padding: 10px;
-            text-align: left;
-            border-bottom: 1px solid #ddd;
-        }
-        .user-table th {
-            background-color: #e9ecef;
-        }
-        .delete-btn {
-            padding: 5px 10px;
-            background-color: #dc3545;
-            color: white;
+        
+        /* Buttons */
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            border-radius: 8px;
+            text-decoration: none;
             border: none;
-            border-radius: 4px;
             cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            margin-right: 10px;
+            margin-bottom: 10px;
         }
-        .delete-btn:hover {
-            background-color: #c82333;
+        
+        .btn-primary {
+            background: #5a6c7d;
+            color: white;
+            border: 1px solid #4a5966;
         }
-        .admin-section {
+        
+        .btn-primary:hover {
+            background: #4a5966;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .btn-success {
+            background: #6c7b7f;
+            color: white;
+            border: 1px solid #5d6c70;
+        }
+        
+        .btn-success:hover {
+            background: #5d6c70;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .btn-danger {
+            background: #8b5a5c;
+            color: white;
+            border: 1px solid #7a4f51;
+        }
+        
+        .btn-danger:hover {
+            background: #7a4f51;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #5a6268;
+            transform: translateY(-1px);
+        }
+        
+        /* Button sizes */
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+        
+        /* Tables */
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+        }
+        
+        .table th,
+        .table td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .table tbody tr:hover {
+            background: #f8f9fa;
+        }
+        
+        /* Update Notification */
+        .update-notification {
+            background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+            border: 1px solid #c3e6cb;
+            color: #155724;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+            display: none;
+        }
+        
+        .update-notification-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .update-notification h4 {
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+            
+            .main-content {
+                margin-left: 0;
+            }
+            
+            .content-area {
+                padding: 20px;
+            }
+        }
+        
+        /* Form Styles */
+        .form-group {
             margin-bottom: 20px;
         }
+        
         .form-label {
             display: block;
-            margin-bottom: 5px;
-            color: #555;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #333;
         }
-        .form-text {
-            display: block;
-            margin-top: 5px;
-            color: #6c757d;
-            font-size: 0.875em;
+        
+        .form-control {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+        
+        .form-control:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        /* Status badges */
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .badge-admin {
+            background: #667eea;
+            color: white;
+        }
+        
+        .badge-chatter {
+            background: #28a745;
+            color: white;
         }
     </style>
     {% endblock %}
 </head>
 <body>
-    <div class="header">
-        <h1>Maloum Model Account Manager</h1>
-        <p>Welcome, {{ current_user.username }} | 
-           <a href="{{ url_for('logout') }}" style="color: white;">Logout</a></p>
+    <div class="app-container">
+        <!-- Sidebar Navigation (Admin Only) -->
+        {% if current_user.is_authenticated and current_user.is_admin %}
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <h1><i class="fas fa-chart-line"></i> Model Board</h1>
+                <div class="version">Version {{ app_version or '1.0.0' }}</div>
+            </div>
+            
+            <div class="nav-menu">
+                <div class="nav-item">
+                    <a href="{{ url_for('dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">
+                        <i class="fas fa-tachometer-alt"></i>
+                        Dashboard
+                    </a>
+                </div>
+                
+                <div class="nav-section">Management</div>
+                <div class="nav-item">
+                    <a href="{{ url_for('model_accounts') }}" class="nav-link {% if request.endpoint == 'model_accounts' %}active{% endif %}">
+                        <i class="fas fa-user-circle"></i>
+                        Model Accounts
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="{{ url_for('user_management') }}" class="nav-link {% if request.endpoint == 'user_management' %}active{% endif %}">
+                        <i class="fas fa-users"></i>
+                        User Management
+                    </a>
+                </div>
+                
+                <div class="nav-section">Quick Actions</div>
+                <div class="nav-item">
+                    <a href="{{ url_for('setup_accounts') }}" class="nav-link {% if request.endpoint == 'setup_accounts' %}active{% endif %}">
+                        <i class="fas fa-user-plus"></i>
+                        Add Model Account
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="{{ url_for('add_user') }}" class="nav-link {% if request.endpoint == 'add_user' %}active{% endif %}">
+                        <i class="fas fa-user-plus"></i>
+                        Add Chatter
+                    </a>
+                </div>
+            </div>
+            
+            <div class="user-info">
+                <div class="user-name">{{ current_user.username }}</div>
+                <a href="{{ url_for('logout') }}" class="logout-btn">
+                    <i class="fas fa-sign-out-alt"></i>
+                    Logout
+                </a>
+            </div>
+        </nav>
+        {% endif %}
+        
+        <!-- Main Content -->
+        <main class="main-content {% if not (current_user.is_authenticated and current_user.is_admin) %}no-sidebar{% endif %} {% if not current_user.is_authenticated %}login-page{% endif %}">
+            {% if current_user.is_authenticated and current_user.is_admin %}
+            <div class="top-bar">
+                <h1 class="page-title">{% block page_title %}Dashboard{% endblock %}</h1>
+            </div>
+            {% endif %}
+            
+            <div class="content-wrapper">
+                {% if current_user.is_authenticated and not current_user.is_admin %}
+                <!-- Simple header for chatters -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-chart-line"></i> Model Board</h3>
+                    </div>
+                    <div class="card-body">
+                        <p>Welcome, {{ current_user.username }} | 
+                           <a href="{{ url_for('logout') }}" style="color: #667eea;">Logout</a></p>
+                    </div>
+                </div>
+                {% endif %}
+                
+                {% block content %}{% endblock %}
+            </div>
+        </main>
     </div>
-    
-    {% block content %}{% endblock %}
 </body>
 </html>

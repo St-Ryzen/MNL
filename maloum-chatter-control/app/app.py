@@ -1333,11 +1333,17 @@ def dashboard():
             else:
                 account['assigned_chatters'] = []
         
+        # Calculate statistics for admin dashboard
+        assigned_accounts_count = sum(1 for account in accounts if account.get('assigned_chatter_ids'))
+        unassigned_accounts_count = len(accounts) - assigned_accounts_count
+        
         log_activity(current_user.id, 'view_dashboard', {'role': 'admin', 'account_count': len(accounts)}, request.remote_addr)
     else:
         # Chatter sees only assigned accounts
         accounts = ModelAccount.get_for_chatter(current_user.id)
         users = []
+        assigned_accounts_count = 0
+        unassigned_accounts_count = 0
         
         # Add assigned_chatters field for consistency (though not needed for chatters)
         for account in accounts:
@@ -1348,7 +1354,58 @@ def dashboard():
     return render_template('dashboard.html', 
                          accounts=accounts, 
                          users=users,
+                         assigned_accounts_count=assigned_accounts_count,
+                         unassigned_accounts_count=unassigned_accounts_count,
                          is_admin=current_user.is_admin,
+                         app_version=APP_VERSION)
+
+@app.route('/model_accounts')
+@login_required
+def model_accounts():
+    if not current_user.is_admin:
+        return redirect(url_for('dashboard'))
+    
+    # Get all accounts and users for admin
+    accounts = ModelAccount.get_all()
+    users = User.get_all()
+    
+    # Populate assigned_chatters for each account for display
+    all_users = {user.id: user for user in users}
+    for account in accounts:
+        assigned_ids = account.get('assigned_chatter_ids', [])
+        if assigned_ids:
+            # Convert to integers and get user objects
+            account['assigned_chatters'] = []
+            for chatter_id in assigned_ids:
+                try:
+                    chatter_id = int(chatter_id)
+                    if chatter_id in all_users:
+                        account['assigned_chatters'].append(all_users[chatter_id])
+                except (ValueError, TypeError):
+                    continue
+        else:
+            account['assigned_chatters'] = []
+    
+    log_activity(current_user.id, 'view_model_accounts', {'account_count': len(accounts)}, request.remote_addr)
+    
+    return render_template('model_accounts.html', 
+                         accounts=accounts, 
+                         users=users,
+                         app_version=APP_VERSION)
+
+@app.route('/user_management')
+@login_required
+def user_management():
+    if not current_user.is_admin:
+        return redirect(url_for('dashboard'))
+    
+    # Get all users for admin
+    users = User.get_all()
+    
+    log_activity(current_user.id, 'view_user_management', {'user_count': len(users)}, request.remote_addr)
+    
+    return render_template('user_management.html', 
+                         users=users,
                          app_version=APP_VERSION)
 
 @app.route('/delete_user/<int:user_id>')

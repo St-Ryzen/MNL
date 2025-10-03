@@ -1,84 +1,157 @@
 {% extends "base.html" %}
 
-{% block title %}Login - Maloum Chatter Control{% endblock %}
+{% block title %}Login - Model Board{% endblock %}
 
 {% block content %}
-    <div class="login-container">
-        <h2>Maloum Chatter Control</h2>
-        <form method="POST">
+    <div class="login-card">
+        <div class="login-header">
+            <i class="fas fa-chart-line login-icon"></i>
+            <h2>Model Board</h2>
+            <p>By Creator Side</p>
+        </div>
+        
+        <form method="POST" class="login-form">
             {{ form.hidden_tag() }}
             <div class="form-group">
                 {{ form.username.label(class="form-label") }}
-                {{ form.username(class="form-control") }}
+                <div class="input-group">
+                    <i class="fas fa-user input-icon"></i>
+                    {{ form.username(class="form-control", placeholder="Enter your username") }}
+                </div>
                 {% if form.username.errors %}
-                    <div class="error">
+                    <div class="error-message">
                         {% for error in form.username.errors %}
-                            {{ error }}
+                            <i class="fas fa-exclamation-triangle"></i> {{ error }}
                         {% endfor %}
                     </div>
                 {% endif %}
             </div>
+            
             <div class="form-group">
                 {{ form.password.label(class="form-label") }}
-                {{ form.password(class="form-control") }}
+                <div class="input-group">
+                    <i class="fas fa-lock input-icon"></i>
+                    {{ form.password(class="form-control", placeholder="Enter your password") }}
+                </div>
                 {% if form.password.errors %}
-                    <div class="error">
+                    <div class="error-message">
                         {% for error in form.password.errors %}
-                            {{ error }}
+                            <i class="fas fa-exclamation-triangle"></i> {{ error }}
                         {% endfor %}
                     </div>
                 {% endif %}
             </div>
-            <button type="submit" class="btn">Login</button>
+            
+            <button type="submit" class="btn btn-login">
+                <i class="fas fa-sign-in-alt"></i>
+                Sign In
+            </button>
         </form>
     </div>
     
     <style>
-        .login-container {
-            background-color: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-            width: 300px;
+        .login-card {
+            background: white;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            width: 400px;
             margin: 0 auto;
         }
-        .login-container h2 {
-            margin-top: 0;
+        
+        .login-header {
             text-align: center;
-            color: #333;
+            margin-bottom: 30px;
         }
-        .form-group {
+        
+        .login-icon {
+            font-size: 48px;
+            color: #667eea;
             margin-bottom: 15px;
         }
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-            color: #555;
+        
+        .login-header h2 {
+            font-size: 28px;
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 8px;
         }
-        .form-group input {
+        
+        .login-header p {
+            color: #666;
+            margin: 0;
+        }
+        
+        .form-group {
+            margin-bottom: 25px;
+        }
+        
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        .input-group {
+            position: relative;
+        }
+        
+        .input-icon {
+            position: absolute;
+            left: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #999;
+            z-index: 2;
+        }
+        
+        .form-control {
             width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
+            padding: 15px 15px 15px 45px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
             box-sizing: border-box;
         }
-        .btn {
+        
+        .form-control:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .btn-login {
             width: 100%;
-            padding: 10px;
-            background-color: #007bff;
+            padding: 15px;
+            background: #5a6c7d;
             color: white;
-            border: none;
-            border-radius: 4px;
+            border: 1px solid #4a5966;
+            border-radius: 8px;
             cursor: pointer;
             font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
         }
-        .btn:hover {
-            background-color: #0056b3;
+        
+        .btn-login:hover {
+            background: #4a5966;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
         }
-        .error {
-            color: red;
+        
+        .error-message {
+            color: #dc3545;
             font-size: 14px;
-            margin-top: 5px;
+            margin-top: 8px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
         }
     </style>
 {% endblock %}

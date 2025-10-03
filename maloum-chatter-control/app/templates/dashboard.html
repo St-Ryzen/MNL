@@ -1,135 +1,160 @@
 {% extends "base.html" %}
 
+{% block page_title %}{% if current_user.is_admin %}Dashboard{% else %}My Accounts{% endif %}{% endblock %}
+
 {% block content %}
-    <div class="version-info" style="text-align: right; font-size: 0.8em; color: #666; margin-bottom: 10px;">
-        Version {{ app_version }}
-    </div>
-    
     {% if current_user.is_admin %}
     <!-- Update notification section -->
-    <div id="update-notification" style="display: none; background: #d4edda; border: 1px solid #c3e6cb; color: #155724; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
+    <div id="update-notification" class="update-notification">
+        <div class="update-notification-content">
             <div>
-                <strong>🚀 Update Available!</strong>
-                <div id="update-details" style="margin-top: 5px; font-size: 0.9em;"></div>
+                <h4><i class="fas fa-rocket"></i> Update Available!</h4>
+                <div id="update-details"></div>
             </div>
             <div>
-                <button id="install-update-btn" style="background: #28a745; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-right: 10px;">Install Update</button>
-                <button id="dismiss-update-btn" style="background: #6c757d; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">Dismiss</button>
+                <button id="install-update-btn" class="btn btn-success">
+                    <i class="fas fa-download"></i> Install Update
+                </button>
+                <button id="dismiss-update-btn" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> Dismiss
+                </button>
             </div>
         </div>
     </div>
     
-    <div class="admin-section">
-        <div class="admin-controls">
-            <h3>Admin Controls</h3>
-            <a href="{{ url_for('setup_accounts') }}" class="admin-btn">Setup Model Account</a>
-            <a href="{{ url_for('add_user') }}" class="admin-btn">Add User</a>
+    <!-- Overview Statistics -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-icon">
+                <i class="fas fa-user-circle"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ accounts|length }}</h3>
+                <p>Model Accounts</p>
+                <a href="{{ url_for('model_accounts') }}" class="stat-link">
+                    <i class="fas fa-arrow-right"></i> Manage
+                </a>
+            </div>
         </div>
         
-        <div class="user-management">
-            <h3>User Management</h3>
-            <table class="user-table">
-                <thead>
-                    <tr>
-                        <th>Username</th>
-                        <th>Role</th>
-                        <th>Assigned Accounts</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for user in users %}
-                    <tr>
-                        <td>{{ user.username }}</td>
-                        <td>{% if user.is_admin %}Admin{% else %}Chatter{% endif %}</td>
-                        <td>
-                            {% for account in user.assigned_models %}
-                                {{ account.model_username }}{% if not loop.last %}, {% endif %}
-                            {% else %}
-                                None
-                            {% endfor %}
-                        </td>
-                        <td>
-                            {% if user.username != current_user.username %}
-                            <button class="delete-btn" onclick="deleteUser({{ user.id }}, '{{ user.username }}')">Delete</button>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+        <div class="stat-card">
+            <div class="stat-icon">
+                <i class="fas fa-users"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ users|length }}</h3>
+                <p>Total Users</p>
+                <a href="{{ url_for('user_management') }}" class="stat-link">
+                    <i class="fas fa-arrow-right"></i> Manage
+                </a>
+            </div>
+        </div>
+        
+        <div class="stat-card">
+            <div class="stat-icon">
+                <i class="fas fa-link"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ assigned_accounts_count or 0 }}</h3>
+                <p>Assigned Accounts</p>
+                <a href="{{ url_for('model_accounts') }}" class="stat-link">
+                    <i class="fas fa-arrow-right"></i> View
+                </a>
+            </div>
+        </div>
+        
+        <div class="stat-card">
+            <div class="stat-icon">
+                <i class="fas fa-user-plus"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ unassigned_accounts_count or 0 }}</h3>
+                <p>Unassigned Accounts</p>
+                <a href="{{ url_for('model_accounts') }}" class="stat-link">
+                    <i class="fas fa-arrow-right"></i> Assign
+                </a>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Quick Actions -->
+    <div class="card">
+        <div class="card-header">
+            <h3><i class="fas fa-bolt"></i> Quick Actions</h3>
+        </div>
+        <div class="card-body">
+            <div class="quick-actions">
+                <a href="{{ url_for('setup_accounts') }}" class="action-btn">
+                    <i class="fas fa-user-plus"></i>
+                    <span>Add Model Account</span>
+                </a>
+                <a href="{{ url_for('add_user') }}" class="action-btn">
+                    <i class="fas fa-user-plus"></i>
+                    <span>Add Chatter</span>
+                </a>
+                <a href="{{ url_for('model_accounts') }}" class="action-btn">
+                    <i class="fas fa-user-circle"></i>
+                    <span>Manage Accounts</span>
+                </a>
+                <a href="{{ url_for('user_management') }}" class="action-btn">
+                    <i class="fas fa-users"></i>
+                    <span>Manage Users</span>
+                </a>
+            </div>
         </div>
     </div>
     {% endif %}
     
-    <h2>Your Model Accounts</h2>
-    
-    {% for account in accounts %}
-    <div class="account-card">
-        <h3>{{ account.model_username }}</h3>
-        {% if current_user.is_admin %}
-            <p><strong>Assigned to:</strong> 
-                {% if account.assigned_chatters %}
-                    {% for chatter in account.assigned_chatters %}
-                        {{ chatter.username }}{% if not loop.last %}, {% endif %}
-                    {% endfor %}
-                {% else %}
-                    Unassigned
-                {% endif %}
-            </p>
-        {% endif %}
-        
-        <div>
-            {% if current_user.is_admin %}
-                <button class="admin-btn" onclick="assignToChatter({{ account.id }})">Assign/Reassign Chatter</button>
-                <button class="delete-btn" onclick="deleteAccount({{ account.id }}, '{{ account.model_username }}')">Delete Account</button>
-            {% endif %}
-            <button class="admin-btn" onclick="launchAccount({{ account.id }})">Launch Account</button>
+    <!-- For Non-Admin Users: Show Their Assigned Accounts -->
+    {% if not current_user.is_admin and accounts %}
+    <div class="card">
+        <div class="card-header">
+            <h3><i class="fas fa-user-circle"></i> Your Model Accounts</h3>
+        </div>
+        <div class="card-body">
+            <div class="accounts-container">
+                {% for account in accounts %}
+                <div class="account-row">
+                    <div class="account-info">
+                        <div class="account-name">
+                            <i class="fas fa-user-circle account-icon"></i>
+                            <strong>{{ account.model_username }}</strong>
+                        </div>
+                    </div>
+                    
+                    <div class="account-actions">
+                        <button class="btn btn-sm btn-success" onclick="launchAccount({{ account.id }})" title="Launch Account">
+                            <i class="fas fa-rocket"></i> Launch
+                        </button>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
         </div>
     </div>
-    {% endfor %}
+    {% elif not current_user.is_admin %}
+    <div class="card">
+        <div class="card-body" style="text-align: center; padding: 40px; color: #666;">
+            <i class="fas fa-user-circle" style="font-size: 48px; margin-bottom: 20px; color: #ddd;"></i>
+            <h4>No Model Accounts</h4>
+            <p>No accounts have been assigned to you yet. Contact your administrator.</p>
+        </div>
+    </div>
+    {% endif %}
     
     <script>
-        // Pass user data to JavaScript
-        const userData = [
-            {% for user in users %}
-                {% if not user.is_admin %}
-                    {id: {{ user.id }}, username: "{{ user.username }}"},
-                {% endif %}
-            {% endfor %}
-        ];
-        
-        async function deleteUser(userId, username) {
-            if (!confirm(`Are you sure you want to delete user '${username}'? This action cannot be undone.`)) {
-                return;
-            }
-            
-            try {
-                const response = await fetch('/api/users/delete', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        user_id: userId
-                    })
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    location.reload(); // Reload page to update user list
-                } else {
-                    alert('Error deleting user: ' + result.error);
-                }
-            } catch (error) {
-                alert('Error deleting user: ' + error.message);
-            }
-        }
         
         async function launchAccount(accountId) {
+            // Find the launch button for this account
+            const launchButton = event.target.closest('button');
+            const originalText = launchButton.innerHTML;
+            
             try {
+                // Show loading state
+                launchButton.disabled = true;
+                launchButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Launching...';
+                launchButton.classList.add('btn-launching');
+                
                 const response = await fetch(`/launch_account/${accountId}`, {
                     method: 'GET'
                 });
@@ -137,130 +162,51 @@
                 const result = await response.json();
                 
                 if (result.success) {
-                    // Browser launched successfully - no popup needed for chatters
+                    // Show success state
+                    launchButton.innerHTML = '<i class="fas fa-check"></i> Launched!';
+                    launchButton.classList.remove('btn-launching');
+                    launchButton.classList.add('btn-launched');
+                    
+                    // Reset button after 3 seconds
+                    setTimeout(() => {
+                        launchButton.disabled = false;
+                        launchButton.innerHTML = originalText;
+                        launchButton.classList.remove('btn-launched');
+                    }, 3000);
+                    
                     console.log('Browser session started successfully! ' + result.message);
                 } else {
+                    // Show error state
+                    launchButton.innerHTML = '<i class="fas fa-times"></i> Error';
+                    launchButton.classList.remove('btn-launching');
+                    launchButton.classList.add('btn-error');
+                    
+                    // Reset button after 2 seconds
+                    setTimeout(() => {
+                        launchButton.disabled = false;
+                        launchButton.innerHTML = originalText;
+                        launchButton.classList.remove('btn-error');
+                    }, 2000);
+                    
                     alert('Error launching account: ' + result.message);
                 }
             } catch (error) {
+                // Show error state
+                launchButton.innerHTML = '<i class="fas fa-times"></i> Error';
+                launchButton.classList.remove('btn-launching');
+                launchButton.classList.add('btn-error');
+                
+                // Reset button after 2 seconds
+                setTimeout(() => {
+                    launchButton.disabled = false;
+                    launchButton.innerHTML = originalText;
+                    launchButton.classList.remove('btn-error');
+                }, 2000);
+                
                 alert('Error launching account: ' + error.message);
             }
         }
         
-        async function deleteAccount(accountId, modelUsername) {
-            if (!confirm(`Are you sure you want to delete the model account '${modelUsername}'? This action cannot be undone.`)) {
-                return;
-            }
-            
-            try {
-                const response = await fetch(`/delete_account/${accountId}`, {
-                    method: 'GET'
-                });
-                
-                if (response.ok) {
-                    alert('Model account deleted successfully!');
-                    location.reload(); // Reload page to update account list
-                } else {
-                    const result = await response.json();
-                    alert('Error deleting account: ' + (result.error || 'Unknown error'));
-                }
-            } catch (error) {
-                alert('Error deleting account: ' + error.message);
-            }
-        }
-        
-        async function assignToChatter(accountId) {
-            // Create options for the select dropdown
-            let optionsHtml = '';
-            userData.forEach(user => {
-                optionsHtml += `<option value="${user.id}">${user.username}</option>`;
-            });
-            
-            // Create a simple modal for assigning chatters
-            const modalHtml = `
-                <div id="assign-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 1000;">
-                    <div style="background: white; padding: 20px; border-radius: 8px; width: 400px;">
-                        <h3>Manage Account Assignments</h3>
-                        <p>Select action:</p>
-                        <select id="action-select" style="width: 100%; padding: 10px; margin-bottom: 15px;">
-                            <option value="assign">Assign to Chatter</option>
-                            <option value="unassign">Unassign from Chatter</option>
-                            <option value="unassign_all">Unassign All Chatters</option>
-                        </select>
-                        
-                        <div id="chatter-selection" style="margin-bottom: 15px;">
-                            <p>Select a chatter:</p>
-                            <select id="chatter-select" style="width: 100%; padding: 10px; margin-bottom: 15px;">
-                                ${optionsHtml}
-                            </select>
-                        </div>
-                        
-                        <div style="display: flex; justify-content: space-between;">
-                            <button id="cancel-btn" style="padding: 10px 15px; background-color: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
-                            <button id="assign-btn" style="padding: 10px 15px; background-color: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">Apply</button>
-                        </div>
-                    </div>
-                </div>
-            `;
-            
-            // Add modal to page
-            document.body.insertAdjacentHTML('beforeend', modalHtml);
-            
-            // Toggle chatter selection visibility based on action
-            document.getElementById('action-select').addEventListener('change', function() {
-                const action = this.value;
-                const chatterSelection = document.getElementById('chatter-selection');
-                if (action === 'unassign_all') {
-                    chatterSelection.style.display = 'none';
-                } else {
-                    chatterSelection.style.display = 'block';
-                }
-            });
-            
-            // Add event listeners
-            document.getElementById('cancel-btn').addEventListener('click', function() {
-                document.getElementById('assign-modal').remove();
-            });
-            
-            document.getElementById('assign-btn').addEventListener('click', async function() {
-                const action = document.getElementById('action-select').value;
-                const chatterSelect = document.getElementById('chatter-select');
-                let chatterId = 0;
-                
-                if (action !== 'unassign_all') {
-                    chatterId = parseInt(chatterSelect.value);
-                } else {
-                    chatterId = -1; // Special value for unassign all
-                }
-                
-                try {
-                    const response = await fetch('/assign_chatter', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            account_id: accountId,
-                            chatter_id: chatterId,
-                            action: action
-                        })
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        alert('Account assignment updated successfully!');
-                        document.getElementById('assign-modal').remove();
-                        // Reload page to update assignments
-                        location.reload();
-                    } else {
-                        alert('Error updating account assignment: ' + result.error);
-                    }
-                } catch (error) {
-                    alert('Error updating account assignment: ' + error.message);
-                }
-            });
-        }
         
         // Auto-update functions
         let currentUpdateInfo = null;
@@ -284,8 +230,10 @@
             const details = document.getElementById('update-details');
             
             details.innerHTML = `
-                New version ${updateInfo.latest_version} is available! 
-                <br><small>Current: ${updateInfo.current_version}</small>
+                <div style="margin-top: 8px;">
+                    New version <strong>${updateInfo.latest_version}</strong> is available! 
+                    <br><small style="opacity: 0.8;">Current: ${updateInfo.current_version}</small>
+                </div>
             `;
             
             notification.style.display = 'block';
@@ -333,6 +281,7 @@
             currentUpdateInfo = null;
         }
         
+        
         // Check for updates when page loads (admin only)
         {% if current_user.is_admin %}
         document.addEventListener('DOMContentLoaded', function() {
@@ -348,4 +297,216 @@
         });
         {% endif %}
     </script>
+    
+    <style>
+        /* Overview Dashboard Styles */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            border: 1px solid #e1e5e9;
+            transition: all 0.3s ease;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(90, 108, 125, 0.15);
+            border-color: #5a6c7d;
+        }
+        
+        .stat-icon {
+            font-size: 32px;
+            color: #5a6c7d;
+            margin-bottom: 15px;
+        }
+        
+        .stat-content h3 {
+            font-size: 36px;
+            font-weight: 700;
+            color: #333;
+            margin: 0 0 8px 0;
+        }
+        
+        .stat-content p {
+            color: #666;
+            margin: 0 0 15px 0;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .stat-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            color: #5a6c7d;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 500;
+            transition: color 0.3s ease;
+        }
+        
+        .stat-link:hover {
+            color: #4a5966;
+        }
+        
+        /* Quick Actions */
+        .quick-actions {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        
+        .action-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            padding: 20px;
+            background: #f8f9fa;
+            border: 1px solid #e1e5e9;
+            border-radius: 8px;
+            color: #5a6c7d;
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+        
+        .action-btn:hover {
+            background: #5a6c7d;
+            color: white;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .action-btn i {
+            font-size: 24px;
+        }
+        
+        .action-btn span {
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        /* Compact account styles for chatter view */
+        .accounts-container {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .account-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            border: 1px solid #e1e5e9;
+            border-radius: 8px;
+            background: white;
+            transition: all 0.2s ease;
+        }
+        
+        .account-row:hover {
+            border-color: #5a6c7d;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .account-info {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex: 1;
+        }
+        
+        .account-name {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 200px;
+        }
+        
+        .account-icon {
+            color: #5a6c7d;
+            font-size: 16px;
+        }
+        
+        .account-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .account-actions .btn {
+            margin: 0;
+        }
+        
+        /* Launch button animation states */
+        .btn-launching {
+            background: #4a5568 !important;
+            cursor: not-allowed !important;
+            animation: pulse 1.5s infinite;
+        }
+        
+        .btn-launched {
+            background: #48bb78 !important;
+            cursor: not-allowed !important;
+        }
+        
+        .btn-error {
+            background: #e53e3e !important;
+            cursor: not-allowed !important;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+        
+        /* Spinner animation is already included in Font Awesome */
+        .fa-spin {
+            animation: fa-spin 1s infinite linear;
+        }
+        
+        @keyframes fa-spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Responsive design for smaller screens */
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .quick-actions {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .account-row {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+            
+            .account-info {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+                width: 100%;
+            }
+            
+            .account-actions {
+                width: 100%;
+                justify-content: flex-end;
+            }
+        }
+    </style>
 {% endblock %}

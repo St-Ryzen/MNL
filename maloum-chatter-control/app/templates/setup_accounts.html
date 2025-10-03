@@ -1,74 +1,113 @@
 {% extends "base.html" %}
 
-{% block title %}Setup Model Account{% endblock %}
+{% block title %}Add Model Account - Model Board{% endblock %}
+
+{% block page_title %}Add Model Account{% endblock %}
 
 {% block content %}
-    <div class="admin-section">
-        <h2>Setup Model Account</h2>
-        
-        {% if success %}
-            <div class="alert alert-success">
-                {{ success }}
-                {% if account_id %}
-                    <br><br>
-                    <button type="button" class="btn" onclick="backupProfile({{ account_id }})">Backup Browser Profile</button>
-                    <span id="backup-result" style="margin-left: 10px;"></span>
-                {% endif %}
-            </div>
-        {% endif %}
-        
-        {% if warning %}
-            <div class="alert alert-warning">{{ warning }}</div>
-        {% endif %}
-        
-        {% if error %}
-            <div class="alert alert-error">{{ error }}</div>
-        {% endif %}
-        
-        <form method="POST" id="setup-form">
-            {{ form.hidden_tag() }}
-            <div class="form-group">
-                {{ form.model_username.label(class="form-label") }}
-                {{ form.model_username(class="form-control", placeholder="Name shown to chatters") }}
-                {% if form.model_username.errors %}
-                    <div class="error">
-                        {% for error in form.model_username.errors %}
-                            {{ error }}
-                        {% endfor %}
+    <!-- Alert Messages -->
+    {% if success %}
+        <div class="alert alert-success">
+            <i class="fas fa-check-circle"></i>
+            {{ success }}
+            {% if account_id %}
+                <div style="margin-top: 15px;">
+                    <button type="button" class="btn btn-primary" onclick="backupProfile({{ account_id }})">
+                        <i class="fas fa-save"></i> Backup Browser Profile
+                    </button>
+                    <span id="backup-result" style="margin-left: 15px;"></span>
+                </div>
+            {% endif %}
+        </div>
+    {% endif %}
+    
+    {% if warning %}
+        <div class="alert alert-warning">
+            <i class="fas fa-exclamation-triangle"></i>
+            {{ warning }}
+        </div>
+    {% endif %}
+    
+    {% if error %}
+        <div class="alert alert-danger">
+            <i class="fas fa-times-circle"></i>
+            {{ error }}
+        </div>
+    {% endif %}
+    
+    <div class="card">
+        <div class="card-header">
+            <h3><i class="fas fa-user-plus"></i> Setup New Model Account</h3>
+        </div>
+        <div class="card-body">
+            <form method="POST" id="setup-form">
+                {{ form.hidden_tag() }}
+                
+                <div class="form-group">
+                    {{ form.model_username.label(class="form-label") }}
+                    <div class="input-group">
+                        <i class="fas fa-id-card input-icon"></i>
+                        {{ form.model_username(class="form-control", placeholder="Display name for chatters") }}
                     </div>
-                {% endif %}
-                <small class="form-text">This is the name chatters will see for this account</small>
-            </div>
-            <div class="form-group">
-                <label for="actual_username" class="form-label">Actual Maloum.com Username/Email</label>
-                <input type="text" id="actual_username" name="actual_username" class="form-control" placeholder="Actual login username or email">
-            </div>
-            <div class="form-group">
-                {{ form.model_password.label(class="form-label") }}
-                {{ form.model_password(class="form-control", placeholder="Actual Maloum.com password") }}
-                {% if form.model_password.errors %}
-                    <div class="error">
-                        {% for error in form.model_password.errors %}
-                            {{ error }}
-                        {% endfor %}
+                    {% if form.model_username.errors %}
+                        <div class="error-message">
+                            {% for error in form.model_username.errors %}
+                                <i class="fas fa-exclamation-triangle"></i> {{ error }}
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                    <small class="form-text">This is the name chatters will see for this account</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="actual_username" class="form-label">Actual Maloum.com Username/Email</label>
+                    <div class="input-group">
+                        <i class="fas fa-envelope input-icon"></i>
+                        <input type="text" id="actual_username" name="actual_username" class="form-control" placeholder="Real login username or email">
                     </div>
-                {% endif %}
-            </div>
-            <div class="form-group">
-                {{ form.chatter_id.label(class="form-label") }}
-                {{ form.chatter_id(class="form-control") }}
-                {% if form.chatter_id.errors %}
-                    <div class="error">
-                        {% for error in form.chatter_id.errors %}
-                            {{ error }}
-                        {% endfor %}
+                </div>
+                
+                <div class="form-group">
+                    {{ form.model_password.label(class="form-label") }}
+                    <div class="input-group">
+                        <i class="fas fa-key input-icon"></i>
+                        {{ form.model_password(class="form-control", placeholder="Actual Maloum.com password") }}
                     </div>
-                {% endif %}
-            </div>
-            
-            <button type="submit" class="btn" id="submit-btn">Setup Account</button>
-        </form>
-        <a href="{{ url_for('dashboard') }}" class="back-link">Back to Dashboard</a>
+                    {% if form.model_password.errors %}
+                        <div class="error-message">
+                            {% for error in form.model_password.errors %}
+                                <i class="fas fa-exclamation-triangle"></i> {{ error }}
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
+                
+                <div class="form-group">
+                    {{ form.chatter_id.label(class="form-label") }}
+                    <div class="input-group">
+                        <i class="fas fa-users input-icon"></i>
+                        {{ form.chatter_id(class="form-control") }}
+                    </div>
+                    {% if form.chatter_id.errors %}
+                        <div class="error-message">
+                            {% for error in form.chatter_id.errors %}
+                                <i class="fas fa-exclamation-triangle"></i> {{ error }}
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                    <small class="form-text">Choose which chatter to assign this account to (optional)</small>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-success" id="submit-btn">
+                        <i class="fas fa-plus"></i> Setup Account
+                    </button>
+                    <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left"></i> Back to Dashboard
+                    </a>
+                </div>
+            </form>
+        </div>
     </div>
 
     <script>
@@ -118,4 +157,85 @@
             });
         }
     </script>
+    
+    <style>
+        .input-group {
+            position: relative;
+        }
+        
+        .input-icon {
+            position: absolute;
+            left: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #999;
+            z-index: 2;
+        }
+        
+        .form-control {
+            padding-left: 45px;
+        }
+        
+        .error-message {
+            color: #dc3545;
+            font-size: 14px;
+            margin-top: 8px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .form-actions {
+            margin-top: 30px;
+            display: flex;
+            gap: 15px;
+        }
+        
+        .form-actions .btn {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        /* Alert Styles */
+        .alert {
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 25px;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+        }
+        
+        .alert-success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        
+        .alert-warning {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+        }
+        
+        .alert-danger {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        
+        .alert i {
+            margin-top: 2px;
+        }
+        
+        .form-text {
+            display: block;
+            margin-top: 6px;
+            color: #666;
+            font-size: 13px;
+        }
+    </style>
 {% endblock %}
