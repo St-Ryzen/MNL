@@ -1,0 +1,351 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="version-info" style="text-align: right; font-size: 0.8em; color: #666; margin-bottom: 10px;">
+        Version {{ app_version }}
+    </div>
+    
+    {% if current_user.is_admin %}
+    <!-- Update notification section -->
+    <div id="update-notification" style="display: none; background: #d4edda; border: 1px solid #c3e6cb; color: #155724; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <strong>🚀 Update Available!</strong>
+                <div id="update-details" style="margin-top: 5px; font-size: 0.9em;"></div>
+            </div>
+            <div>
+                <button id="install-update-btn" style="background: #28a745; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-right: 10px;">Install Update</button>
+                <button id="dismiss-update-btn" style="background: #6c757d; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">Dismiss</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="admin-section">
+        <div class="admin-controls">
+            <h3>Admin Controls</h3>
+            <a href="{{ url_for('setup_accounts') }}" class="admin-btn">Setup Model Account</a>
+            <a href="{{ url_for('add_user') }}" class="admin-btn">Add User</a>
+        </div>
+        
+        <div class="user-management">
+            <h3>User Management</h3>
+            <table class="user-table">
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>Role</th>
+                        <th>Assigned Accounts</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user in users %}
+                    <tr>
+                        <td>{{ user.username }}</td>
+                        <td>{% if user.is_admin %}Admin{% else %}Chatter{% endif %}</td>
+                        <td>
+                            {% for account in user.assigned_models %}
+                                {{ account.model_username }}{% if not loop.last %}, {% endif %}
+                            {% else %}
+                                None
+                            {% endfor %}
+                        </td>
+                        <td>
+                            {% if user.username != current_user.username %}
+                            <button class="delete-btn" onclick="deleteUser({{ user.id }}, '{{ user.username }}')">Delete</button>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+    
+    <h2>Your Model Accounts</h2>
+    
+    {% for account in accounts %}
+    <div class="account-card">
+        <h3>{{ account.model_username }}</h3>
+        {% if current_user.is_admin %}
+            <p><strong>Assigned to:</strong> 
+                {% if account.assigned_chatters %}
+                    {% for chatter in account.assigned_chatters %}
+                        {{ chatter.username }}{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                {% else %}
+                    Unassigned
+                {% endif %}
+            </p>
+        {% endif %}
+        
+        <div>
+            {% if current_user.is_admin %}
+                <button class="admin-btn" onclick="assignToChatter({{ account.id }})">Assign/Reassign Chatter</button>
+                <button class="delete-btn" onclick="deleteAccount({{ account.id }}, '{{ account.model_username }}')">Delete Account</button>
+            {% endif %}
+            <button class="admin-btn" onclick="launchAccount({{ account.id }})">Launch Account</button>
+        </div>
+    </div>
+    {% endfor %}
+    
+    <script>
+        // Pass user data to JavaScript
+        const userData = [
+            {% for user in users %}
+                {% if not user.is_admin %}
+                    {id: {{ user.id }}, username: "{{ user.username }}"},
+                {% endif %}
+            {% endfor %}
+        ];
+        
+        async function deleteUser(userId, username) {
+            if (!confirm(`Are you sure you want to delete user '${username}'? This action cannot be undone.`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/users/delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        user_id: userId
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    location.reload(); // Reload page to update user list
+                } else {
+                    alert('Error deleting user: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error deleting user: ' + error.message);
+            }
+        }
+        
+        async function launchAccount(accountId) {
+            try {
+                const response = await fetch(`/launch_account/${accountId}`, {
+                    method: 'GET'
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Browser launched successfully - no popup needed for chatters
+                    console.log('Browser session started successfully! ' + result.message);
+                } else {
+                    alert('Error launching account: ' + result.message);
+                }
+            } catch (error) {
+                alert('Error launching account: ' + error.message);
+            }
+        }
+        
+        async function deleteAccount(accountId, modelUsername) {
+            if (!confirm(`Are you sure you want to delete the model account '${modelUsername}'? This action cannot be undone.`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/delete_account/${accountId}`, {
+                    method: 'GET'
+                });
+                
+                if (response.ok) {
+                    alert('Model account deleted successfully!');
+                    location.reload(); // Reload page to update account list
+                } else {
+                    const result = await response.json();
+                    alert('Error deleting account: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error deleting account: ' + error.message);
+            }
+        }
+        
+        async function assignToChatter(accountId) {
+            // Create options for the select dropdown
+            let optionsHtml = '';
+            userData.forEach(user => {
+                optionsHtml += `<option value="${user.id}">${user.username}</option>`;
+            });
+            
+            // Create a simple modal for assigning chatters
+            const modalHtml = `
+                <div id="assign-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 1000;">
+                    <div style="background: white; padding: 20px; border-radius: 8px; width: 400px;">
+                        <h3>Manage Account Assignments</h3>
+                        <p>Select action:</p>
+                        <select id="action-select" style="width: 100%; padding: 10px; margin-bottom: 15px;">
+                            <option value="assign">Assign to Chatter</option>
+                            <option value="unassign">Unassign from Chatter</option>
+                            <option value="unassign_all">Unassign All Chatters</option>
+                        </select>
+                        
+                        <div id="chatter-selection" style="margin-bottom: 15px;">
+                            <p>Select a chatter:</p>
+                            <select id="chatter-select" style="width: 100%; padding: 10px; margin-bottom: 15px;">
+                                ${optionsHtml}
+                            </select>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between;">
+                            <button id="cancel-btn" style="padding: 10px 15px; background-color: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                            <button id="assign-btn" style="padding: 10px 15px; background-color: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">Apply</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Add modal to page
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            
+            // Toggle chatter selection visibility based on action
+            document.getElementById('action-select').addEventListener('change', function() {
+                const action = this.value;
+                const chatterSelection = document.getElementById('chatter-selection');
+                if (action === 'unassign_all') {
+                    chatterSelection.style.display = 'none';
+                } else {
+                    chatterSelection.style.display = 'block';
+                }
+            });
+            
+            // Add event listeners
+            document.getElementById('cancel-btn').addEventListener('click', function() {
+                document.getElementById('assign-modal').remove();
+            });
+            
+            document.getElementById('assign-btn').addEventListener('click', async function() {
+                const action = document.getElementById('action-select').value;
+                const chatterSelect = document.getElementById('chatter-select');
+                let chatterId = 0;
+                
+                if (action !== 'unassign_all') {
+                    chatterId = parseInt(chatterSelect.value);
+                } else {
+                    chatterId = -1; // Special value for unassign all
+                }
+                
+                try {
+                    const response = await fetch('/assign_chatter', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            account_id: accountId,
+                            chatter_id: chatterId,
+                            action: action
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        alert('Account assignment updated successfully!');
+                        document.getElementById('assign-modal').remove();
+                        // Reload page to update assignments
+                        location.reload();
+                    } else {
+                        alert('Error updating account assignment: ' + result.error);
+                    }
+                } catch (error) {
+                    alert('Error updating account assignment: ' + error.message);
+                }
+            });
+        }
+        
+        // Auto-update functions
+        let currentUpdateInfo = null;
+        
+        async function checkForUpdates() {
+            try {
+                const response = await fetch('/api/check-updates');
+                const updateInfo = await response.json();
+                
+                if (updateInfo.update_available) {
+                    currentUpdateInfo = updateInfo;
+                    showUpdateNotification(updateInfo);
+                }
+            } catch (error) {
+                console.error('Error checking for updates:', error);
+            }
+        }
+        
+        function showUpdateNotification(updateInfo) {
+            const notification = document.getElementById('update-notification');
+            const details = document.getElementById('update-details');
+            
+            details.innerHTML = `
+                New version ${updateInfo.latest_version} is available! 
+                <br><small>Current: ${updateInfo.current_version}</small>
+            `;
+            
+            notification.style.display = 'block';
+        }
+        
+        async function installUpdate() {
+            if (!currentUpdateInfo) return;
+            
+            const installBtn = document.getElementById('install-update-btn');
+            const originalText = installBtn.textContent;
+            
+            try {
+                installBtn.textContent = 'Installing...';
+                installBtn.disabled = true;
+                
+                const response = await fetch('/api/install-update', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert(`Update successful! The application will restart automatically. New version: ${currentUpdateInfo.latest_version}`);
+                    // The application should restart automatically
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 3000);
+                } else {
+                    alert('Update failed: ' + result.message);
+                    installBtn.textContent = originalText;
+                    installBtn.disabled = false;
+                }
+            } catch (error) {
+                alert('Error installing update: ' + error.message);
+                installBtn.textContent = originalText;
+                installBtn.disabled = false;
+            }
+        }
+        
+        function dismissUpdate() {
+            document.getElementById('update-notification').style.display = 'none';
+            currentUpdateInfo = null;
+        }
+        
+        // Check for updates when page loads (admin only)
+        {% if current_user.is_admin %}
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check for updates immediately
+            checkForUpdates();
+            
+            // Set up periodic checking (every 30 minutes)
+            setInterval(checkForUpdates, 30 * 60 * 1000);
+            
+            // Set up event listeners
+            document.getElementById('install-update-btn').addEventListener('click', installUpdate);
+            document.getElementById('dismiss-update-btn').addEventListener('click', dismissUpdate);
+        });
+        {% endif %}
+    </script>
+{% endblock %}

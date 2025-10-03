@@ -2128,3 +2128,4 @@
 2025-10-04 02:51:29,608 INFO: Activity logged: User 2, Action: launch_account [in C:\Users\Noel Periarce\Documents\MNL\maloum-chatter-control\app.py:358]
 2025-10-04 02:51:47,483 INFO: Activity logged: User 2, Action: logout [in C:\Users\Noel Periarce\Documents\MNL\maloum-chatter-control\app.py:358]
 2025-10-04 02:52:26,637 INFO: Activity logged: User 1, Action: login [in C:\Users\Noel Periarce\Documents\MNL\maloum-chatter-control\app.py:358]
+2025-10-04 02:52:28,372 INFO: Activity logged: User 1, Action: view_dashboard [in C:\Users\Noel Periarce\Documents\MNL\maloum-chatter-control\app.py:358]
