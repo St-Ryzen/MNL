@@ -65,15 +65,26 @@ echo [25%%] Ensuring pip is available...
 !PYTHON_CMD! -m pip install --upgrade pip --quiet --disable-pip-version-check
 echo [25%%] Pip is ready!
 
+REM Force use of pre-built binary wheels to avoid compilation errors
+echo Configuring pip to use pre-built packages (avoids build errors)...
+set PIP_ONLY_BINARY=:all:
+set PIP_PREFER_BINARY=1
+
 REM Install packages using requirements.txt first (more reliable)
 :install_packages
 echo Checking required packages...
 if exist "app\requirements.txt" (
     echo Found requirements.txt, installing packages from file...
-    !PYTHON_CMD! -m pip install -r app\requirements.txt --quiet --disable-pip-version-check
+    !PYTHON_CMD! -m pip install -r app\requirements.txt --prefer-binary --only-binary=greenlet,cryptography --quiet --disable-pip-version-check
     if !errorlevel! neq 0 (
-        echo WARNING: Could not install from requirements.txt, installing packages individually...
-        goto :install_individual_packages
+        echo WARNING: Could not install from requirements.txt, trying alternative method...
+        echo Installing greenlet separately with pre-built binary...
+        !PYTHON_CMD! -m pip install greenlet --only-binary :all: --quiet --disable-pip-version-check
+        !PYTHON_CMD! -m pip install -r app\requirements.txt --prefer-binary --quiet --disable-pip-version-check
+        if !errorlevel! neq 0 (
+            echo WARNING: Still having issues, installing packages individually...
+            goto :install_individual_packages
+        )
     )
     echo [100%%] SUCCESS: Packages installed from requirements.txt!
     echo.
@@ -95,19 +106,24 @@ if %errorlevel% neq 0 (
     
     REM Install packages with pip - more comprehensive approach
     echo [50%%] Installing core packages...
-    !PYTHON_CMD! -m pip install flask flask-login flask-sqlalchemy --quiet --disable-pip-version-check
-    
+    !PYTHON_CMD! -m pip install flask flask-login flask-sqlalchemy --prefer-binary --quiet --disable-pip-version-check
+
     echo [75%%] Installing web automation and security packages...
-    !PYTHON_CMD! -m pip install selenium webdriver-manager cryptography flask-wtf --quiet --disable-pip-version-check
+    !PYTHON_CMD! -m pip install selenium webdriver-manager cryptography flask-wtf --prefer-binary --only-binary=greenlet,cryptography --quiet --disable-pip-version-check
     
     if !errorlevel! neq 0 (
         echo.
         echo ERROR: Failed to install some packages
         echo.
-        echo MANUAL SOLUTION:
-        echo 1. Right-click this file and select "Run as administrator"
-        echo 2. Or try: pip install --user flask flask-login flask-sqlalchemy flask-wtf selenium webdriver-manager cryptography
-        echo 3. Or create a Python virtual environment
+        echo TROUBLESHOOTING STEPS:
+        echo 1. Make sure you have internet connection
+        echo 2. Right-click this file and select "Run as administrator"
+        echo 3. If you see "greenlet" errors, you may need Microsoft C++ Build Tools
+        echo    Download from: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+        echo 4. Alternative: Try upgrading Python to latest version from python.org
+        echo.
+        echo MANUAL INSTALL COMMAND:
+        echo pip install --user --prefer-binary flask flask-login flask-sqlalchemy flask-wtf selenium webdriver-manager cryptography
         echo.
         goto :exit_with_pause
     )

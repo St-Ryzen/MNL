@@ -269,10 +269,28 @@ class User(UserMixin):
 # ModelAccount helper functions
 class ModelAccount:
     @staticmethod
+    def _execute_with_retry(query_func, max_retries=2):
+        """Execute a Supabase query with retry logic for timeout errors"""
+        import time
+        for attempt in range(max_retries):
+            try:
+                return query_func()
+            except Exception as e:
+                error_str = str(e)
+                if 'statement timeout' in error_str.lower() and attempt < max_retries - 1:
+                    app.logger.warning(f'Query timeout on attempt {attempt + 1}, retrying...')
+                    time.sleep(0.5)  # Brief delay before retry
+                    continue
+                raise  # Re-raise if not a timeout or last attempt
+
+    @staticmethod
     def get_all():
         """Get all model accounts from Supabase"""
         try:
-            response = supabase.table('model_accounts').select('*').execute()
+            # Only select essential fields, exclude large binary fields to avoid timeout
+            response = supabase.table('model_accounts').select(
+                'id, model_username, actual_username, encrypted_password, assigned_chatter_ids, created_at, last_session_update'
+            ).execute()
             return response.data
         except Exception as e:
             app.logger.error(f'Error getting model accounts: {str(e)}')
@@ -285,9 +303,12 @@ class ModelAccount:
             # Convert chatter_id to int for BIGINT comparison
             chatter_int = int(chatter_id)
             app.logger.info(f'Getting accounts for chatter ID: {chatter_int}')
-            
+
             # Get all accounts and filter in Python since PostgreSQL array contains can be tricky
-            response = supabase.table('model_accounts').select('*').execute()
+            # Only select essential fields, exclude large binary fields to avoid timeout
+            response = supabase.table('model_accounts').select(
+                'id, model_username, actual_username, encrypted_password, assigned_chatter_ids, created_at, last_session_update'
+            ).execute()
             accounts = response.data
             
             filtered_accounts = []
@@ -452,22 +473,33 @@ class ModelAccountManager:
         try:
             app.logger.info(f"Capturing session data for account {account_id}")
             
+            # Initialize session data using full module reference to avoid variable conflicts
+            import datetime as dt_module
+            timestamp_value = dt_module.datetime.now()
             session_data = {
                 'cookies': [],
                 'localStorage': {},
                 'sessionStorage': {},
-                'timestamp': str(datetime.now())
+                'timestamp': timestamp_value.isoformat()  # Using isoformat instead of str for consistency
             }
             
+            # Debug: Log current URL before capturing
+            current_url = driver.current_url
+            app.logger.info(f"Current URL for account {account_id}: {current_url}")
+            
             # Capture cookies
+            app.logger.info("Starting cookie capture...")
             try:
                 cookies = driver.get_cookies()
+                app.logger.info(f"Retrieved {len(cookies)} cookies from browser")
+                
                 # Filter and store essential cookies
                 essential_cookie_names = [
                     'sb-', 'auth', 'token', 'session', 'login', 'jwt', 
                     'access', 'refresh', 'maloum', '_ga', 'ph_'
                 ]
                 
+                essential_cookies_count = 0
                 for cookie in cookies:
                     cookie_name = cookie.get('name', '').lower()
                     # Include if cookie name contains any essential keywords
@@ -480,79 +512,151 @@ class ModelAccountManager:
                             'secure': cookie.get('secure', False),
                             'httpOnly': cookie.get('httpOnly', False)
                         })
-                        app.logger.info(f"Captured cookie: {cookie.get('name')}")
+                        app.logger.info(f"Captured essential cookie: {cookie.get('name')}")
+                        essential_cookies_count += 1
                 
-                app.logger.info(f"Captured {len(session_data['cookies'])} essential cookies")
+                # If no essential cookies were captured, capture all cookies as fallback
+                if essential_cookies_count == 0:
+                    app.logger.info("No essential cookies found, capturing all cookies as fallback")
+                    for cookie in cookies:
+                        session_data['cookies'].append({
+                            'name': cookie.get('name'),
+                            'value': cookie.get('value'),
+                            'domain': cookie.get('domain'),
+                            'path': cookie.get('path'),
+                            'secure': cookie.get('secure', False),
+                            'httpOnly': cookie.get('httpOnly', False)
+                        })
+                        app.logger.debug(f"Captured fallback cookie: {cookie.get('name')}")
+                
+                app.logger.info(f"Final cookie count: {len(session_data['cookies'])} (essential: {essential_cookies_count})")
                 
             except Exception as e:
-                app.logger.error(f"Error capturing cookies: {str(e)}")
+                app.logger.error(f"Error capturing cookies: {str(e)}", exc_info=True)
             
             # Capture localStorage
+            app.logger.info("Starting localStorage capture...")
             try:
                 localStorage_script = """
-                var localStorage_data = {};
-                for (var key in localStorage) {
-                    if (localStorage.hasOwnProperty(key)) {
-                        localStorage_data[key] = localStorage.getItem(key);
+                (function() {
+                    try {
+                        var localStorage_data = {};
+                        for (var key in localStorage) {
+                            if (localStorage.hasOwnProperty(key)) {
+                                localStorage_data[key] = localStorage.getItem(key);
+                            }
+                        }
+                        console.log('localStorage keys found: ' + Object.keys(localStorage_data).length);
+                        return localStorage_data;
+                    } catch (e) {
+                        console.error('Error accessing localStorage:', e);
+                        // If direct access fails, return empty object
+                        return {};
                     }
-                }
-                return localStorage_data;
+                })();
                 """
                 localStorage_data = driver.execute_script(localStorage_script)
+                if localStorage_data is None:
+                    localStorage_data = {}
                 session_data['localStorage'] = localStorage_data
                 app.logger.info(f"Captured localStorage with {len(localStorage_data)} items: {list(localStorage_data.keys())}")
                 
             except Exception as e:
-                app.logger.error(f"Error capturing localStorage: {str(e)}")
+                app.logger.error(f"Error capturing localStorage: {str(e)}", exc_info=True)
+                session_data['localStorage'] = {}
             
             # Capture sessionStorage
+            app.logger.info("Starting sessionStorage capture...")
             try:
                 sessionStorage_script = """
-                var sessionStorage_data = {};
-                for (var key in sessionStorage) {
-                    if (sessionStorage.hasOwnProperty(key)) {
-                        sessionStorage_data[key] = sessionStorage.getItem(key);
+                (function() {
+                    try {
+                        var sessionStorage_data = {};
+                        for (var key in sessionStorage) {
+                            if (sessionStorage.hasOwnProperty(key)) {
+                                sessionStorage_data[key] = sessionStorage.getItem(key);
+                            }
+                        }
+                        console.log('sessionStorage keys found: ' + Object.keys(sessionStorage_data).length);
+                        return sessionStorage_data;
+                    } catch (e) {
+                        console.error('Error accessing sessionStorage:', e);
+                        // If direct access fails, return empty object
+                        return {};
                     }
-                }
-                return sessionStorage_data;
+                })();
                 """
                 sessionStorage_data = driver.execute_script(sessionStorage_script)
+                if sessionStorage_data is None:
+                    sessionStorage_data = {}
                 session_data['sessionStorage'] = sessionStorage_data
                 app.logger.info(f"Captured sessionStorage with {len(sessionStorage_data)} items: {list(sessionStorage_data.keys())}")
                 
             except Exception as e:
-                app.logger.error(f"Error capturing sessionStorage: {str(e)}")
+                app.logger.error(f"Error capturing sessionStorage: {str(e)}", exc_info=True)
+                session_data['sessionStorage'] = {}
+            
+            # Final debug: Log total captured data
+            app.logger.info(f"Session data capture completed for account {account_id}")
+            app.logger.info(f"  - Cookies: {len(session_data['cookies'])}")
+            app.logger.info(f"  - LocalStorage: {len(session_data['localStorage'])} items")
+            app.logger.info(f"  - SessionStorage: {len(session_data['sessionStorage'])} items")
             
             return session_data
             
         except Exception as e:
-            app.logger.error(f"Error capturing session data: {str(e)}")
+            app.logger.error(f"Error capturing session data: {str(e)}", exc_info=True)
             return None
 
     def save_session_to_supabase(self, account_id, session_data):
         """Save session data to Supabase"""
         try:
-            from datetime import datetime
+            # Log what we're about to save
+            app.logger.info(f"Preparing to save session data for account {account_id}")
+            app.logger.info(f"Local storage items: {len(session_data.get('localStorage', {}))}")
+            app.logger.info(f"Cookie count: {len(session_data.get('cookies', []))}")
+            app.logger.info(f"Session storage items: {len(session_data.get('sessionStorage', {}))}")
             
             # Update the model account with session data
+            # Use full module reference to avoid variable conflicts
+            import datetime as dt_module
             update_data = {
                 'auth_tokens': session_data.get('localStorage', {}),
                 'session_cookies': session_data.get('cookies', []),
                 'session_storage': session_data.get('sessionStorage', {}),
-                'last_session_update': datetime.now().isoformat()
+                'last_session_update': dt_module.datetime.now().isoformat()
             }
             
+            app.logger.info(f"Update data prepared: {list(update_data.keys())}")
+            app.logger.info(f"Auth tokens count: {len(update_data['auth_tokens'])}")
+            app.logger.info(f"Session cookies count: {len(update_data['session_cookies'])}")
+            app.logger.info(f"Session storage count: {len(update_data['session_storage'])}")
+
             response = supabase.table('model_accounts').update(update_data).eq('id', account_id).execute()
-            
-            if response.data:
+
+            app.logger.info(f"Supabase response: {response}")
+            if hasattr(response, 'data') and response.data:
+                app.logger.info(f"Response data: {response.data}")
+                
+                # Verify the update by reading back from Supabase
+                verification_response = supabase.table('model_accounts').select('auth_tokens, session_cookies, session_storage, last_session_update').eq('id', account_id).execute()
+                if verification_response.data:
+                    verification_data = verification_response.data[0]
+                    app.logger.info(f"Verification - auth_tokens count: {len(verification_data.get('auth_tokens', {}))}")
+                    app.logger.info(f"Verification - session_cookies count: {len(verification_data.get('session_cookies', []))}")
+                    app.logger.info(f"Verification - session_storage count: {len(verification_data.get('session_storage', {}))}")
+                    app.logger.info(f"Verification - last_session_update: {verification_data.get('last_session_update')}")
+                
                 app.logger.info(f"Session data saved to Supabase for account {account_id}")
                 return True
             else:
                 app.logger.error(f"No data returned when saving session for account {account_id}")
+                app.logger.error(f"Response object: {response}")
+                app.logger.error(f"Response attributes: {dir(response) if hasattr(response, '__dict__') else 'No __dict__'}")
                 return False
                 
         except Exception as e:
-            app.logger.error(f"Error saving session to Supabase: {str(e)}")
+            app.logger.error(f"Error saving session to Supabase: {str(e)}", exc_info=True)
             return False
 
     def restore_session_from_supabase(self, driver, account_id):
@@ -572,16 +676,40 @@ class ModelAccountManager:
             # Restore cookies
             if account_data.get('session_cookies'):
                 try:
+                    restored_cookie_count = 0
                     for cookie_data in account_data['session_cookies']:
-                        driver.add_cookie({
-                            'name': cookie_data['name'],
-                            'value': cookie_data['value'],
-                            'domain': cookie_data['domain'],
-                            'path': cookie_data['path'],
-                            'secure': cookie_data.get('secure', False),
-                            'httpOnly': cookie_data.get('httpOnly', False)
-                        })
-                    app.logger.info(f"Restored {len(account_data['session_cookies'])} cookies")
+                        # Log cookie details for debugging
+                        app.logger.info(f"Restoring cookie: {cookie_data['name']} (domain: {cookie_data['domain']}, path: {cookie_data['path']})")
+                        
+                        # Handle potential domain issues - sometimes cookies need to be set on the current domain
+                        try:
+                            driver.add_cookie({
+                                'name': cookie_data['name'],
+                                'value': cookie_data['value'],
+                                'domain': cookie_data['domain'],
+                                'path': cookie_data['path'],
+                                'secure': cookie_data.get('secure', False),
+                                'httpOnly': cookie_data.get('httpOnly', False)
+                            })
+                        except Exception as domain_error:
+                            app.logger.warning(f"Failed to set cookie {cookie_data['name']} with domain {cookie_data['domain']}: {str(domain_error)}")
+                            # Try setting without domain (will use current domain)
+                            try:
+                                driver.add_cookie({
+                                    'name': cookie_data['name'],
+                                    'value': cookie_data['value'],
+                                    'path': cookie_data['path'],
+                                    'secure': cookie_data.get('secure', False),
+                                    'httpOnly': cookie_data.get('httpOnly', False)
+                                })
+                                app.logger.info(f"Successfully set cookie {cookie_data['name']} without domain specification")
+                            except Exception as fallback_error:
+                                app.logger.error(f"Failed to set cookie {cookie_data['name']} even without domain: {str(fallback_error)}")
+                                continue
+                                
+                        restored_cookie_count += 1
+                        
+                    app.logger.info(f"Restored {restored_cookie_count} cookies")
                 except Exception as e:
                     app.logger.error(f"Error restoring cookies: {str(e)}")
             
@@ -654,7 +782,7 @@ class ModelAccountManager:
                     'local storage', 'local storage\\leveldb',  # CRITICAL: Authentication tokens here
                     'session storage', 'session storage\\leveldb',
                     'network', 'default\\network', 'default\\local storage',
-                    'default\\session storage', 'gcm store', 'sync data'
+                    'default\\session storage', 'gcm store', 'sync data', 'sync data\\leveldb'
                 ]
                 
                 # Files/patterns to skip (but allow essential ones)
@@ -691,19 +819,20 @@ class ModelAccountManager:
                             is_extensions_dir = 'extension' in rel_path
                             is_network_dir = 'network' in rel_path
                             is_cookies_dir = 'cookies' in rel_path
-                            
+                            is_sync_data_dir = 'sync data' in rel_path or 'syncdata' in rel_path
+
                             # General essential directory check
                             is_essential_dir = any(essential in rel_path for essential in essential_dirs)
-                            
-                            # Force include critical authentication directories
-                            is_critical_auth_dir = is_localStorage_dir or is_sessionStorage_dir or is_network_dir or is_cookies_dir
-                            
+
+                            # Force include critical authentication directories INCLUDING chrome.storage.sync
+                            is_critical_auth_dir = is_localStorage_dir or is_sessionStorage_dir or is_network_dir or is_cookies_dir or is_sync_data_dir
+
                             # Final decision: essential OR critical auth directory
                             is_essential_dir = is_essential_dir or is_critical_auth_dir
                             
                             # Debug: Log directory decisions for critical paths
                             if is_critical_auth_dir or 'extension' in rel_path:
-                                app.logger.info(f'Directory decision: {rel_path} - Essential: {is_essential_dir} (localStorage: {is_localStorage_dir}, sessionStorage: {is_sessionStorage_dir}, extensions: {is_extensions_dir})')
+                                app.logger.info(f'Directory decision: {rel_path} - Essential: {is_essential_dir} (localStorage: {is_localStorage_dir}, sessionStorage: {is_sessionStorage_dir}, syncData: {is_sync_data_dir}, extensions: {is_extensions_dir})')
                             
                             # Skip directories unless they are essential
                             dirs[:] = [d for d in dirs if is_essential_dir or not any(skip in d.lower() for skip in skip_dirs)]
@@ -716,8 +845,8 @@ class ModelAccountManager:
                                 is_essential_file = any(essential in file_lower for essential in essential_files)
                                 is_in_essential_dir = is_essential_dir or any(essential in rel_path for essential in essential_dirs)
                                 
-                                # CRITICAL: Force include localStorage/sessionStorage database files
-                                is_critical_auth_file = (is_localStorage_dir or is_sessionStorage_dir) and (
+                                # CRITICAL: Force include localStorage/sessionStorage/syncData database files
+                                is_critical_auth_file = (is_localStorage_dir or is_sessionStorage_dir or is_sync_data_dir) and (
                                     file_lower in ['current', 'log', 'lock', 'manifest-000001'] or
                                     file_lower.endswith(('.log', '.ldb', '.dbtmp')) or
                                     file_lower.startswith(('000', 'manifest'))
@@ -1013,19 +1142,62 @@ class ModelAccountManager:
                 'username': username,
                 'password': password
             }
-        
+
         # Get the user data directory for this account
         user_data_dir = self.get_user_data_dir(account_id, username)
         app.logger.info(f'Using browser profile directory: {user_data_dir}')
-        
+
         chrome_options = Options()
+
+        # Explicitly set Chrome binary path for Windows
+        chrome_options.binary_location = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+
         chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_argument("--disable-extensions-file-access-check")
+        chrome_options.add_argument("--disable-extensions-http-throttling")
+
+        # Use random port to avoid conflicts
+        import random
+        debug_port = random.randint(9222, 9999)
+        chrome_options.add_argument(f"--remote-debugging-port={debug_port}")
+
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-software-rasterizer")
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
-        
+
+        # ✨ AUTO-LOAD LINGUANA EXTENSION
+        # Note: Only load extension for chatter use, not during initial setup
+        extension_loaded = False
+        if open_for_chatter:  # Only load for chatters, not during admin setup
+            try:
+                # Get the extension directory path
+                app_dir = os.path.dirname(os.path.abspath(__file__))
+                project_root = os.path.dirname(app_dir)
+                extension_path = os.path.join(project_root, "extension", "Linguana-v1.0.2")
+
+                if os.path.exists(extension_path):
+                    # Verify it's a valid extension directory
+                    manifest_path = os.path.join(extension_path, "manifest.json")
+                    if os.path.exists(manifest_path):
+                        # DISABLED: --load-extension causes Chrome crash on Windows
+                        # abs_extension_path = os.path.abspath(extension_path)
+                        # chrome_options.add_argument(f"--load-extension={abs_extension_path}")
+                        app.logger.info(f'[INFO] Extension found at: {extension_path} (manual load required)')
+                        extension_loaded = False
+                    else:
+                        app.logger.warning(f'[WARN] Extension manifest.json not found: {manifest_path}')
+                else:
+                    app.logger.warning(f'[WARN] Linguana extension directory not found: {extension_path}')
+            except Exception as e:
+                app.logger.error(f'Error configuring Linguana extension: {str(e)}')
+                # Continue without extension rather than failing
+        else:
+            app.logger.info('[INFO] Extension loading skipped during admin setup - will load when chatters launch')
+
         # For chatter use, make the browser more visible and user-friendly
         if open_for_chatter:
             chrome_options.add_argument("--start-maximized")
@@ -1034,7 +1206,12 @@ class ModelAccountManager:
         try:
             # Use specific Chrome type to avoid architecture issues
             try:
-                service = Service(ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install())
+                driver_path = ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install()
+                # Fix path if it points to wrong file
+                if not driver_path.endswith('.exe'):
+                    driver_dir = os.path.dirname(driver_path)
+                    driver_path = os.path.join(driver_dir, 'chromedriver.exe')
+                service = Service(driver_path)
                 driver = webdriver.Chrome(service=service, options=chrome_options)
             except Exception as e:
                 print(f"ChromeDriverManager failed: {e}, trying direct Chrome")
@@ -1047,9 +1224,12 @@ class ModelAccountManager:
             if open_for_chatter:
                 app.logger.info(f"=== RESTORING SESSION FROM SUPABASE for account {account_id} ===")
                 
-                # First, navigate to the domain to set up for cookie restoration
-                driver.get("https://app.maloum.com")
+                # First, navigate to a neutral page (homepage) to set up for cookie restoration
+                driver.get("https://app.maloum.com/")
                 app.logger.info(f"Initial page load: {driver.current_url}")
+                
+                # Small delay to ensure page is fully loaded
+                time.sleep(1)
                 
                 # Restore session data from Supabase
                 session_restored = self.restore_session_from_supabase(driver, account_id)
@@ -1057,11 +1237,23 @@ class ModelAccountManager:
                 if session_restored:
                     app.logger.info(f"✓ Session data restored from Supabase for account {account_id}")
                     
+                    # Verify cookies were actually set
+                    try:
+                        all_cookies = driver.get_cookies()
+                        app.logger.info(f"Total cookies after restoration: {len(all_cookies)}")
+                        # Log authentication-related cookies
+                        auth_cookies = [c for c in all_cookies if 'auth' in c['name'].lower() or 'session' in c['name'].lower()]
+                        app.logger.info(f"Auth-related cookies found: {len(auth_cookies)}")
+                        for cookie in auth_cookies[:5]:  # Log first 5 auth cookies
+                            app.logger.info(f"Auth cookie: {cookie['name']} = {cookie['value'][:50]}...")
+                    except Exception as verify_error:
+                        app.logger.warning(f"Could not verify cookies after restoration: {str(verify_error)}")
+                    
                     # Refresh the page to apply restored session data
                     driver.refresh()
                     
-                    # Wait a moment for the page to load with restored session
-                    time.sleep(2)
+                    # Wait longer for the page to load with restored session
+                    time.sleep(5)  # Increased wait time to ensure cookies take effect
                     
                 else:
                     app.logger.warning(f"✗ Failed to restore session data from Supabase for account {account_id}")
@@ -1199,6 +1391,212 @@ class ModelAccountManager:
             if driver:
                 driver.quit()
             return False, f"Failed to start browser session: {error_msg}"
+
+    def start_browser_session_local(self, account_id, username, password, open_for_chatter=False):
+        """Start a browser session for a model account using only local profile (no Supabase restoration)"""
+        # Store credentials for potential reconnection (only for admin setup)
+        if not open_for_chatter:
+            self.account_credentials[account_id] = {
+                'username': username,
+                'password': password
+            }
+
+        # Get the user data directory for this account
+        user_data_dir = self.get_user_data_dir(account_id, username)
+        app.logger.info(f'Using local browser profile directory (no restoration): {user_data_dir}')
+
+        chrome_options = Options()
+
+        # Explicitly set Chrome binary path for Windows
+        chrome_options.binary_location = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+
+        chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_argument("--disable-extensions-file-access-check")
+        chrome_options.add_argument("--disable-extensions-http-throttling")
+
+        # Use random port to avoid conflicts
+        import random
+        debug_port = random.randint(9222, 9999)
+        chrome_options.add_argument(f"--remote-debugging-port={debug_port}")
+
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-software-rasterizer")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
+
+        # ✨ ATTEMPT TO LOAD LINGUANA EXTENSION from local profile
+        # Try to load the extension that should already be in the profile
+        if open_for_chatter:  # Only for chatter use
+            try:
+                # Get the extension directory path
+                app_dir = os.path.dirname(os.path.abspath(__file__))
+                project_root = os.path.dirname(app_dir)
+                extension_path = os.path.join(project_root, "extension", "Linguana-v1.0.2")
+
+                if os.path.exists(extension_path):
+                    # Verify it's a valid extension directory
+                    manifest_path = os.path.join(extension_path, "manifest.json")
+                    if os.path.exists(manifest_path):
+                        app.logger.info(f'[INFO] Extension available at: {extension_path}')
+                        # The extension should already be in the profile, so we don't need to load it via argument
+                        # Extension in profile should be automatically loaded by Chrome
+                    else:
+                        app.logger.warning(f'[WARN] Extension manifest.json not found: {manifest_path}')
+                else:
+                    app.logger.warning(f'[WARN] Linguana extension directory not found: {extension_path}')
+            except Exception as e:
+                app.logger.error(f'Error checking Linguana extension: {str(e)}')
+                # Continue without extension rather than failing
+
+        # For chatter use, make the browser more visible and user-friendly
+        if open_for_chatter:
+            chrome_options.add_argument("--start-maximized")
+
+        driver = None
+        try:
+            # Use specific Chrome type to avoid architecture issues
+            try:
+                driver_path = ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install()
+                # Fix path if it points to wrong file
+                if not driver_path.endswith('.exe'):
+                    driver_dir = os.path.dirname(driver_path)
+                    driver_path = os.path.join(driver_dir, 'chromedriver.exe')
+                service = Service(driver_path)
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+            except Exception as e:
+                print(f"ChromeDriverManager failed: {e}, trying direct Chrome")
+                # Fallback to direct Chrome if ChromeDriverManager fails
+                driver = webdriver.Chrome(options=chrome_options)
+            
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            
+            # For chatter use, since we're using local profile, just navigate to the chat
+            if open_for_chatter:
+                app.logger.info(f"Using local profile for account {account_id} - no Supabase restoration")
+                
+                # Give the profile time to settle and extensions to load
+                app.logger.info("Waiting for profile to settle and extensions to load...")
+                time.sleep(3)
+                
+                # Navigate directly to the chat page to verify login
+                chat_url = "https://app.maloum.com/chat"
+                app.logger.info(f"Navigating to chat page: {chat_url}")
+                driver.get(chat_url)
+
+                # Log the current URL to see where we actually ended up
+                current_url = driver.current_url
+                app.logger.info(f"After navigation, current URL: {current_url}")
+
+                # Wait to see if we're logged in
+                try:
+                    # Check if we're already logged in by looking for the Messages header
+                    WebDriverWait(driver, 5).until(
+                        EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Messages')]"))
+                    )
+                    app.logger.info(f"Local profile session successful for {username}, found Messages header")
+                    print(f"Local profile session successful for {username}")
+
+                    # Store the driver in our managers
+                    self.browsers[account_id] = driver
+                    return True, f"Browser session restored successfully for {username} (using local profile with extensions)"
+
+                except:
+                    # Check what page we're actually on
+                    current_url = driver.current_url
+                    page_title = driver.title
+                    app.logger.warning(f"Local profile session failed for {username}. Current URL: {current_url}, Title: {page_title}")
+
+                    # Log cookies to understand current state
+                    cookies_after = driver.get_cookies()
+                    app.logger.info(f"Cookies in local profile: {len(cookies_after)}")
+
+                    # Check if we're on login page specifically
+                    if "login" in current_url.lower():
+                        app.logger.info(f"Redirected to login page - session expired for {username}")
+                        message = f"Session expired for {username}. Try first-time launch to restore from Supabase."
+                    else:
+                        app.logger.info(f"Unknown page state for {username}, may need manual intervention")
+                        message = f"Browser opened for {username} but unable to verify login status. Current page: {page_title}"
+
+                    print(f"Session issue for {username}: {message}")
+                    self.browsers[account_id] = driver
+                    return True, message  # Return True since browser opened, even if login issue
+            
+            # For admin setup, proceed with full login process
+            else:
+                # Navigate directly to the chat page to check if already logged in
+                chat_url = "https://app.maloum.com/chat"
+                driver.get(chat_url)
+
+                # Wait a moment to see if we're already logged in
+                try:
+                    # Check if we're already logged in by looking for the Messages header
+                    WebDriverWait(driver, 3).until(
+                        EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Messages')]"))
+                    )
+                    print(f"Already logged in for {username}, staying on chat page")
+
+                    # Store the driver in our managers
+                    self.browsers[account_id] = driver
+                    return True, f"Browser session restored successfully for {username} (already logged in)"
+
+                except:
+                    # Not logged in, need to login
+                    print(f"Not logged in, proceeding with login for {username}")
+
+                # Navigate to Maloum.com login page
+                login_url = "https://app.maloum.com/login?returnPath=/chat"
+                driver.get(login_url)
+
+                # Handle cookie consent if it appears
+                try:
+                    # Wait for cookie consent button and click it
+                    accept_button = WebDriverWait(driver, 5).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, "a.cmpboxbtn.cmpboxbtnyes.cmptxt_btn_yes"))
+                    )
+                    accept_button.click()
+                    print("Cookie consent accepted")
+                except:
+                    # If cookie consent doesn't appear, continue
+                    print("No cookie consent window found, continuing...")
+
+                # Wait for and fill in the username field
+                username_field = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.NAME, "usernameOrEmail"))
+                )
+                username_field.clear()
+                username_field.send_keys(username)
+
+                # Fill in the password field
+                password_field = driver.find_element(By.NAME, "password")
+                password_field.clear()
+                password_field.send_keys(password)
+
+                # Click the login button
+                login_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit'].flex.h-fit.w-full")
+                login_button.click()
+
+                # Wait to see if login was successful by checking for the Messages header
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Messages')]"))
+                )
+
+                print(f"Successfully logged in for {username}")
+
+                # Store the driver in our managers
+                self.browsers[account_id] = driver
+
+                return True, f"Browser session started successfully for {username}"
+
+        except Exception as e:
+            error_msg = str(e)
+            print(f"Error starting local browser session: {error_msg}")
+            if driver:
+                driver.quit()
+            return False, f"Failed to start local browser session: {error_msg}"
 
     def test_login(self, username, password):
         """Test login credentials without keeping the session"""
@@ -1536,6 +1934,134 @@ def launch_account(account_id):
         return jsonify({'success': False, 'message': message})
 
 
+@app.route('/launch_account_local/<int:account_id>')
+@login_required
+def launch_account_local(account_id):
+    """Launch account using only local profile, no Supabase restoration"""
+    accounts = ModelAccount.get_all()
+    account = next((acc for acc in accounts if acc['id'] == account_id), None)
+    
+    if not account:
+        return jsonify({'error': 'Account not found'}), 404
+    
+    # Check if the current user has access to this account
+    if not current_user.is_admin:
+        assigned_ids = account.get('assigned_chatter_ids', [])
+        # Convert assigned_ids to integers for comparison
+        try:
+            assigned_ids = [int(x) for x in assigned_ids if x is not None]
+            if int(current_user.id) not in assigned_ids:
+                app.logger.warning(f'Access denied: User {current_user.id} not in assigned_ids {assigned_ids} for account {account_id}')
+                return jsonify({'error': 'Access denied'}), 403
+        except (ValueError, TypeError) as e:
+            app.logger.error(f'Error processing assigned_chatter_ids for account {account_id}: {str(e)}')
+            return jsonify({'error': 'Access denied'}), 403
+    
+    # Decrypt the password
+    try:
+        encrypted_password = account['encrypted_password']
+        # If it's a base64 string, decode it first
+        if isinstance(encrypted_password, str):
+            encrypted_password = base64.b64decode(encrypted_password.encode('utf-8'))
+        decrypted_password = cipher_suite.decrypt(encrypted_password).decode()
+    except Exception as e:
+        return jsonify({'error': f'Failed to decrypt password: {str(e)}'}), 500
+    
+    # Use actual_username if available, otherwise fall back to model_username
+    login_username = account.get('actual_username') or account['model_username']
+    
+    # Skip Supabase profile restoration - use existing local profile
+    app.logger.info(f'Skipping profile restoration, using existing local profile for account {account_id}')
+    
+    # Check what's actually in the profile directory
+    model_manager.check_profile_contents(account_id, account['model_username'])
+    
+    # Start browser session directly with local profile (no restoration)
+    success, message = model_manager.start_browser_session_local(
+        account_id, 
+        login_username, 
+        decrypted_password, 
+        open_for_chatter=True
+    )
+    
+    if success:
+        log_activity(current_user.id, 'launch_account_local', {
+            'account_id': account_id, 
+            'model_username': account['model_username'],
+            'launch_type': 'local_profile'
+        }, request.remote_addr)
+        return jsonify({'success': True, 'message': message})
+    else:
+        return jsonify({'success': False, 'message': message})
+
+
+@app.route('/backup_with_extension/<int:account_id>')
+@login_required
+def backup_with_extension(account_id):
+    """Backup the current browser profile to Supabase (after extension installation)"""
+    accounts = ModelAccount.get_all()
+    account = next((acc for acc in accounts if acc['id'] == account_id), None)
+    
+    if not account:
+        return jsonify({'error': 'Account not found'}), 404
+    
+    # Check if the current user has access to this account
+    if not current_user.is_admin:
+        assigned_ids = account.get('assigned_chatter_ids', [])
+        # Convert assigned_ids to integers for comparison
+        try:
+            assigned_ids = [int(x) for x in assigned_ids if x is not None]
+            if int(current_user.id) not in assigned_ids:
+                app.logger.warning(f'Access denied: User {current_user.id} not in assigned_ids {assigned_ids} for account {account_id}')
+                return jsonify({'error': 'Access denied'}), 403
+        except (ValueError, TypeError) as e:
+            app.logger.error(f'Error processing assigned_chatter_ids for account {account_id}: {str(e)}')
+            return jsonify({'error': 'Access denied'}), 403
+    
+    try:
+        app.logger.info(f'Starting backup process for account {account_id} (with extensions)')
+        
+        # Close browser if it's open to prevent file locks
+        browser_was_open = False
+        if account_id in model_manager.browsers:
+            try:
+                model_manager.browsers[account_id].quit()
+                del model_manager.browsers[account_id]
+                browser_was_open = True
+                app.logger.info(f'Closed browser for account {account_id} before backup')
+                # Give more time for files to be released on Windows
+                time.sleep(3)
+            except Exception as e:
+                app.logger.warning(f'Could not close browser for account {account_id}: {str(e)}')
+
+        # Backup the browser profile (should include extensions)
+        success = model_manager.backup_browser_profile(account_id, account['model_username'])
+
+        if success:
+            log_activity(current_user.id, 'backup_with_extension', {
+                'account_id': account_id,
+                'model_username': account['model_username'],
+                'browser_was_open': browser_was_open,
+                'backup_type': 'with_extensions'
+            }, request.remote_addr)
+            
+            status_msg = 'Browser profile with extensions backed up successfully!'
+            if browser_was_open:
+                status_msg += ' (Browser was closed during backup)'
+            
+            return jsonify({'success': True, 'message': status_msg})
+        else:
+            app.logger.error(f'Backup with extensions failed for account {account_id}')
+            return jsonify({'success': False, 'message': 'Failed to backup browser profile with extensions. Check logs for details.'})
+        
+    except Exception as e:
+        app.logger.error(f'Extension backup error for account {account_id}: {str(e)}')
+        return jsonify({'success': False, 'message': f'Extension backup error: {str(e)}'})
+
+
+@app.route('/setup_accounts', methods=['GET', 'POST'])
+
+
 @app.route('/setup_accounts', methods=['GET', 'POST'])
 @login_required
 def setup_accounts():
@@ -1702,6 +2228,110 @@ def backup_profile(account_id):
         app.logger.error(f'Backup error for account {account_id}: {str(e)}')
         return jsonify({'success': False, 'message': f'Backup error: {str(e)}'})
 
+@app.route('/capture_session/<int:account_id>')
+@login_required
+def capture_session(account_id):
+    """Manually capture and save session data for an account"""
+    if not current_user.is_admin:
+        return jsonify({'success': False, 'message': 'Access denied'}), 403
+    
+    try:
+        # Get account details to verify it exists
+        accounts = ModelAccount.get_all()
+        account = next((acc for acc in accounts if acc['id'] == account_id), None)
+        
+        if not account:
+            return jsonify({'success': False, 'message': 'Account not found'}), 404
+
+        app.logger.info(f'Manually capturing session data for account {account_id}')
+        
+        # Check if browser is open for this account
+        if account_id in model_manager.browsers:
+            driver = model_manager.browsers[account_id]
+            
+            # First, navigate to the Maloum domain to ensure proper context for session data
+            current_url = driver.current_url
+            if "maloum" not in current_url.lower():
+                try:
+                    app.logger.info(f"Navigating to Maloum.com to capture session data. Current URL: {current_url}")
+                    driver.get("https://app.maloum.com/chat")
+                    time.sleep(3)  # Wait for page to load and potential session restoration
+                except Exception as nav_error:
+                    app.logger.warning(f"Could not navigate to Maloum.com: {str(nav_error)}. Proceeding with current page.")
+            
+            # Capture session data
+            session_data = model_manager.capture_session_data(driver, account_id)
+            
+            # Save session data to Supabase
+            # Check if we have any session data (cookies, localStorage, or sessionStorage)
+            has_data = (session_data and 
+                       (len(session_data.get('cookies', [])) > 0 or 
+                        len(session_data.get('localStorage', {})) > 0 or 
+                        len(session_data.get('sessionStorage', {})) > 0))
+            
+            if has_data:
+                success = model_manager.save_session_to_supabase(account_id, session_data)
+                if success:
+                    app.logger.info(f"✓ Session data manually saved to Supabase for account {account_id}")
+                    return jsonify({
+                        'success': True, 
+                        'message': f'Session data captured and saved successfully for account {account["model_username"]}!'
+                    })
+                else:
+                    app.logger.error(f"✗ Failed to save session data to Supabase for account {account_id}")
+                    return jsonify({'success': False, 'message': 'Failed to save session data to Supabase'})
+            else:
+                app.logger.warning(f"✗ No session data captured for account {account_id}")
+                return jsonify({'success': False, 'message': 'No session data found to capture (no cookies, localStorage, or sessionStorage found)'})
+        else:
+            app.logger.error(f"✗ Browser not open for account {account_id}, cannot capture session data")
+            return jsonify({'success': False, 'message': 'Browser not open for this account. Please launch the account first.'})
+        
+    except Exception as e:
+        app.logger.error(f'Session capture error for account {account_id}: {str(e)}')
+        return jsonify({'success': False, 'message': f'Session capture error: {str(e)}'})
+
+@app.route('/check_supabase_data/<int:account_id>')
+@login_required
+def check_supabase_data(account_id):
+    """Check what data is currently in Supabase for an account"""
+    if not current_user.is_admin:
+        return jsonify({'success': False, 'message': 'Access denied'}), 403
+    
+    try:
+        # Get the current data from Supabase
+        response = supabase.table('model_accounts').select('auth_tokens, session_cookies, session_storage, last_session_update, browser_profile_backup').eq('id', account_id).execute()
+        
+        if response.data:
+            account_data = response.data[0]
+            app.logger.info(f"Current Supabase data for account {account_id}:")
+            app.logger.info(f"  - auth_tokens: {len(account_data.get('auth_tokens', {}))} items")
+            app.logger.info(f"  - session_cookies: {len(account_data.get('session_cookies', []))} items")
+            app.logger.info(f"  - session_storage: {len(account_data.get('session_storage', {}))} items")
+            app.logger.info(f"  - last_session_update: {account_data.get('last_session_update')}")
+            app.logger.info(f"  - browser_profile_backup: {'present' if account_data.get('browser_profile_backup') else 'not present'}")
+            
+            return jsonify({
+                'success': True,
+                'data': {
+                    'auth_tokens_count': len(account_data.get('auth_tokens', {})),
+                    'session_cookies_count': len(account_data.get('session_cookies', [])),
+                    'session_storage_count': len(account_data.get('session_storage', {})),
+                    'last_session_update': account_data.get('last_session_update'),
+                    'browser_profile_backup': bool(account_data.get('browser_profile_backup'))
+                }
+            })
+        else:
+            app.logger.warning(f"No data found in Supabase for account {account_id}")
+            return jsonify({
+                'success': False, 
+                'message': 'No account found in Supabase'
+            })
+    
+    except Exception as e:
+        app.logger.error(f'Error checking Supabase data for account {account_id}: {str(e)}')
+        return jsonify({'success': False, 'message': f'Error checking Supabase data: {str(e)}'})
+
 @app.route('/add_user', methods=['GET', 'POST'])
 @login_required
 def add_user():
@@ -1807,9 +2437,8 @@ def assign_chatter():
 @login_required
 def check_updates():
     """Check for available updates"""
-    if not current_user.is_admin:
-        return jsonify({'success': False, 'message': 'Access denied'}), 403
-    
+    # Allow all authenticated users to check for updates
+    # Updates are informational only, installation requires admin privileges
     try:
         update_info = app_updater.check_for_updates()
         return jsonify(update_info)
@@ -1824,31 +2453,29 @@ def check_updates():
 @csrf.exempt
 @login_required
 def install_update():
-    """Install available update"""
-    if not current_user.is_admin:
-        return jsonify({'success': False, 'message': 'Access denied'}), 403
-    
+    """Install available update - Available to all authenticated users"""
     try:
         # First check for updates
         update_info = app_updater.check_for_updates()
-        
+
         if not update_info.get('update_available'):
             return jsonify({
                 'success': False,
                 'message': 'No updates available'
             })
-        
+
         # Install the update
         install_result = app_updater.download_and_install_update(update_info)
-        
+
         if install_result.get('success'):
             log_activity(current_user.id, 'system_update', {
                 'from_version': update_info['current_version'],
-                'to_version': update_info['latest_version']
+                'to_version': update_info['latest_version'],
+                'user_role': 'admin' if current_user.is_admin else 'chatter'
             }, request.remote_addr)
-        
+
         return jsonify(install_result)
-        
+
     except Exception as e:
         app.logger.error(f'Error installing update: {str(e)}')
         return jsonify({
