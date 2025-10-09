@@ -1,0 +1,61 @@
+{
+  "manifest_version": 3,
+  "name": "Linguana",
+  "version": "2.3.0",
+  "description": "AI Translator",
+  "permissions": [
+    "storage",
+    "activeTab", 
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://api.together.xyz/*",
+    "https://app.maloum.com/*",
+    "https://linguana-pro-license-control-default-rtdb.firebaseio.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://app.maloum.com/*"],
+        "js": [
+          "firebase-license-validator.js",
+          "cache-storage.js", 
+          "cache-manager.js", 
+          "emoji-manager.js", 
+          "prompt-manager.js",
+          "ai-assist-manager.js", 
+          "licensed-content.js",
+          "translation-service.js", 
+          "payout-manager.js",
+          "content.js",
+          "tracker.js"
+        ],
+      "css": ["styles.css"],
+      "run_at": "document_start"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Linguana Pro Together.xyz AI Settings",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png", 
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png", 
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["popup.html"],
+      "matches": ["https://app.maloum.com/*"]
+    }
+  ]
+}

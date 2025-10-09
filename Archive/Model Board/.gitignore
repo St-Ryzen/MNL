@@ -1,0 +1,57 @@
+# ==========================================
+# Maloum Chatter Control - Git Ignore
+# ==========================================
+
+# Browser Profiles (large, machine-specific data)
+# These are backed up to Supabase, not Git
+app/browser_profiles/*
+!app/browser_profiles/.gitkeep
+
+# Backups
+backup_*/
+*_backup/
+*_backup.zip
+*.backup
+*.bak
+*_existing_backup/
+
+# Environment files
+.env
+.env.local
+.env.production
+.env.development
+
+# Secret keys
+secret.key
+*.key
+
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
